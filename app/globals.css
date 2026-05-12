@@ -2,43 +2,155 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════
+   ARROWHEAD 7 — OFFICIAL PALETTE (Bonner.AI aligned)
+   Locked 2026-05-12. Zero flat colors. Everything electric.
+   ═══════════════════════════════════════════════════════ */
+
 :root {
-  --a7-accent: #FF4D00;
-  --a7-accent-hover: #FF6A2E;
-  --a7-black: #0A0A0A;
-  --a7-dark: #141414;
-  --a7-gray: #1E1E1E;
+  /* Core brand */
+  --a7-teal: #2DD4BF;
+  --a7-copper: #B87333;
+  --a7-void: #0A0A0A;
+  --a7-text: #F5F0E8;
+
+  /* Teal ramp */
+  --a7-teal-deep: #0D5C5A;
+  --a7-teal-mid: #1A8E84;
+  --a7-teal-bright: #5BE8D5;
+  --a7-teal-glow: #8FF0E5;
+
+  /* Copper ramp */
+  --a7-copper-ember: #4A2510;
+  --a7-copper-deep: #6B3A1A;
+  --a7-copper-mid: #8B5A2B;
+  --a7-copper-bright: #D4944A;
+  --a7-copper-gold: #E8B06A;
+
+  /* Surfaces (gradient endpoints) */
+  --a7-base: #0C0C0A;
+  --a7-surface: #10100E;
+  --a7-elevated: #1A1918;
+  --a7-muted: #30302E;
 }
 
 body {
-  color: #FAFAFA;
-  background: #0A0A0A;
+  color: var(--a7-text);
+  background: var(--a7-void);
   font-family: 'Inter', system-ui, sans-serif;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #141414;
-}
-::-webkit-scrollbar-thumb {
-  background: #2A2A2A;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3A3A3A;
+/* ─── Custom scrollbar ─── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--a7-base); }
+::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--a7-elevated), var(--a7-muted)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, var(--a7-muted), #3A3A38); }
+
+/* ─── Gradient text utilities ─── */
+@layer utilities {
+  .text-grad-teal {
+    background: linear-gradient(135deg, #1a9e8f, #2DD4BF, #5BE8D5);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-grad-copper {
+    background: linear-gradient(135deg, #8B5A2B, #B87333, #D4944A);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-grad-dual {
+    background: linear-gradient(135deg, #2DD4BF, #B87333);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-grad-gold {
+    background: linear-gradient(135deg, #D4944A, #E8B06A);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Glow text shadows */
+  .glow-teal-text {
+    text-shadow: 0 0 20px rgba(45,212,191,0.5), 0 0 40px rgba(45,212,191,0.2);
+  }
+  .glow-copper-text {
+    text-shadow: 0 0 20px rgba(184,115,51,0.5), 0 0 40px rgba(184,115,51,0.2);
+  }
+
+  /* Glow box utilities */
+  .glow-teal-box {
+    box-shadow: 0 0 20px rgba(45,212,191,0.15), 0 0 40px rgba(45,212,191,0.05);
+  }
+  .glow-copper-box {
+    box-shadow: 0 0 20px rgba(184,115,51,0.15), 0 0 40px rgba(184,115,51,0.05);
+  }
+  .glow-dual-box {
+    box-shadow: 0 0 20px rgba(45,212,191,0.15), 0 0 20px rgba(184,115,51,0.15);
+  }
+
+  /* Top-edge light line (1px gradient) */
+  .edge-light-teal {
+    position: relative;
+  }
+  .edge-light-teal::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(45,212,191,0.3), transparent);
+    pointer-events: none;
+  }
+  .edge-light-copper {
+    position: relative;
+  }
+  .edge-light-copper::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(184,115,51,0.3), transparent);
+    pointer-events: none;
+  }
+  .edge-light-dual {
+    position: relative;
+  }
+  .edge-light-dual::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(45,212,191,0.2), rgba(184,115,51,0.15), transparent);
+    pointer-events: none;
+  }
+
+  /* Gradient divider rule */
+  .divider-dual {
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #2DD4BF, #B87333);
+    box-shadow: 0 0 12px rgba(45,212,191,0.3), 0 0 12px rgba(184,115,51,0.3);
+    border-radius: 1px;
+  }
 }
 
-/* Render progress animation */
+/* ─── Shimmer animation (render progress) ─── */
+.shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(45,212,191,0.15) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
-}
-
-.shimmer {
-  background: linear-gradient(90deg, transparent 0%, rgba(255, 77, 0, 0.1) 50%, transparent 100%);
-  background-size: 200% 100%;
-  animation: shimmer 2s infinite;
 }
