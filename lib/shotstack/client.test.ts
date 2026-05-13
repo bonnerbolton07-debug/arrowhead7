@@ -1,0 +1,67 @@
+import { describe, it, expect } from 'vitest';
+import { buildTimelineFromStyleDNA } from './client';
+import type { WhisperTranscription } from '@/lib/captions/whisper';
+
+describe('buildTimelineFromStyleDNA', () => {
+  it('produces a valid minimal Shotstack config without a Style DNA', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4');
+    expect(config.timeline.tracks).toHaveLength(1);
+    expect(config.timeline.tracks[0].clips).toHaveLength(1);
+    expect(config.timeline.tracks[0].clips[0].asset.type).toBe('video');
+    expect(config.timeline.tracks[0].clips[0].asset.src).toBe('r2://source.mp4');
+    expect(config.output.format).toBe('mp4');
+    expect(config.output.resolution).toBe('1080');
+  });
+
+  it('respects targetDuration on the video clip', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      targetDuration: 22,
+    });
+    const clip = config.timeline.tracks[0].clips[0];
+    expect(clip.length).toBe(22);
+  });
+
+  it('overrides output format and resolution', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      outputFormat: 'webm',
+      outputResolution: '4k',
+      outputFps: 60,
+    });
+    expect(config.output.format).toBe('webm');
+    expect(config.output.resolution).toBe('4k');
+    expect(config.output.fps).toBe(60);
+  });
+
+  it('adds a caption track when captions are provided', () => {
+    const transcription: WhisperTranscription = {
+      text: 'Hello world',
+      language: 'en',
+      duration: 1,
+      segments: [{ id: 0, start: 0, end: 1, text: 'Hello world' }],
+      words: [
+        { word: 'Hello', start: 0, end: 0.5 },
+        { word: 'world', start: 0.5, end: 1 },
+      ],
+    };
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      captions: { transcription, style: 'tiktok-bold' },
+    });
+    expect(config.timeline.tracks.length).toBeGreaterThanOrEqual(2);
+    const captionTrack = config.timeline.tracks[0];
+    expect(captionTrack.clips[0].asset.type).toBe('title');
+  });
+
+  it('stamps a watermark when tier is free', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      tier: 'free',
+    });
+    expect(config.timeline.tracks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('omits the watermark for pro tier', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      tier: 'pro',
+    });
+    expect(config.timeline.tracks).toHaveLength(1);
+  });
+});
