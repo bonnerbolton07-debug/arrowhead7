@@ -4,26 +4,34 @@
 // Triggers a Shotstack render and tracks the job
 
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { submitRender } from '@/lib/shotstack/client';
 
 export const dynamic = 'force-dynamic';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const Body = z.object({
+  editId: z.string().regex(UUID_RE, 'Invalid editId'),
+});
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
     const supabase = await createServerSupabaseClient();
-    const { editId } = await request.json();
-
-    if (!editId) {
-      return NextResponse.json({ error: 'Missing editId' }, { status: 400 });
+    const json = await request.json().catch(() => null);
+    const parsed = Body.safeParse(json);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
+    const { editId } = parsed.data;
 
     // Fetch the edit
     const { data: edit, error: editError } = await supabase
       .from('edits')
-      .select('*')
+      .select('id, render_config, status')
       .eq('id', editId)
       .eq('user_id', user.id)
       .single();
@@ -34,6 +42,11 @@ export async function POST(request: NextRequest) {
 
     if (!edit.render_config) {
       return NextResponse.json({ error: 'Edit has no render config' }, { status: 400 });
+    }
+
+    // Reject re-render of an already-active job to avoid duplicate spends
+    if (edit.status === 'rendering' || edit.status === 'queued') {
+      return NextResponse.json({ error: 'Render already in progress' }, { status: 409 });
     }
 
     // Atomically deduct credit only if balance >= 1. This avoids the
@@ -62,7 +75,7 @@ export async function POST(request: NextRequest) {
     } catch (renderError) {
       // Refund the credit if the upstream submit fails
       await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
-      console.error('Shotstack submit failed:', renderError);
+      console.error('Render submit failed:', renderError);
       return NextResponse.json({ error: 'Render submission failed' }, { status: 502 });
     }
 

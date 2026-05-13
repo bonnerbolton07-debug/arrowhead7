@@ -279,21 +279,21 @@ export default function EditorPage() {
         style={{ background: 'radial-gradient(ellipse at 50% 30%, rgba(45,212,191,0.03) 0%, transparent 50%)' }}
       />
 
-      <header className="relative flex items-center justify-between px-6 py-4 border-b border-a7-text/[0.04]">
+      <header className="relative flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-a7-text/[0.04] gap-3">
         <div
-          className="absolute bottom-0 left-6 right-6 h-px"
+          className="absolute bottom-0 left-4 right-4 sm:left-6 sm:right-6 h-px"
           style={{ background: 'linear-gradient(90deg, transparent, rgba(45,212,191,0.12), rgba(184,115,51,0.08), transparent)' }}
         />
-        <div className="flex items-center gap-4">
-          <a href="/dashboard" className="flex items-center gap-3 text-a7-text/40 hover:text-a7-text text-sm transition-colors">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+          <a href="/dashboard" className="flex items-center gap-2 sm:gap-3 text-a7-text/40 hover:text-a7-text text-sm transition-colors">
             <LogoIcon size={24} variant="dual" />
-            <span>&larr; Dashboard</span>
+            <span className="hidden sm:inline">&larr; Dashboard</span>
           </a>
-          <span className="text-a7-text/10">|</span>
-          <span className="font-medium text-a7-text">New Edit</span>
+          <span className="hidden sm:inline text-a7-text/10">|</span>
+          <span className="font-medium text-a7-text text-sm sm:text-base truncate">New Edit</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-3">
           {STEPS.map((s, i) => (
             <div key={s.id} className="flex items-center gap-2">
               <div
@@ -313,7 +313,11 @@ export default function EditorPage() {
           ))}
         </div>
 
-        <div className="text-sm text-a7-text/40 w-[140px] text-right">
+        <div className="md:hidden text-xs text-a7-text/50">
+          {`Step ${stepIndex + 1}/${STEPS.length} · ${STEPS[stepIndex].label}`}
+        </div>
+
+        <div className="hidden sm:block text-sm text-a7-text/40 w-[140px] text-right">
           {editId ? `Edit ${editId.slice(0, 8)}` : ''}
         </div>
       </header>

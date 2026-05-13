@@ -27,7 +27,7 @@ export default function SignupForm() {
     }
     if (!isSupabaseConfigured()) {
       setFormError(
-        'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.'
+        'Sign-up is temporarily unavailable. Please try again shortly.'
       );
       return;
     }

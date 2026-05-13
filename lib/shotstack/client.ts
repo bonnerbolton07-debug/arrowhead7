@@ -4,7 +4,7 @@
 // Cloud video rendering via Shotstack Edit API
 // Docs: https://shotstack.io/docs/api/
 
-import type { ShotstackRenderConfig, RenderJob } from '@/types/edit';
+import type { ShotstackRenderConfig } from '@/types/edit';
 
 const SHOTSTACK_API_URL = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
 const isProduction = SHOTSTACK_API_URL.includes('/v1');

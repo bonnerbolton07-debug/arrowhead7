@@ -262,9 +262,10 @@ CREATE POLICY "Users can create edits" ON public.edits FOR INSERT WITH CHECK (au
 CREATE POLICY "Users can update own edits" ON public.edits FOR UPDATE USING (auth.uid() = user_id);
 CREATE POLICY "Users can delete own edits" ON public.edits FOR DELETE USING (auth.uid() = user_id);
 
--- Render Jobs: users can view their own
+-- Render Jobs: users can view, create, and update their own
 CREATE POLICY "Users can view own render jobs" ON public.render_jobs FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Users can create render jobs" ON public.render_jobs FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own render jobs" ON public.render_jobs FOR UPDATE USING (auth.uid() = user_id);
 
 -- Style DNA: users can CRUD their own
 CREATE POLICY "Users can view own style dna" ON public.style_dna FOR SELECT USING (auth.uid() = user_id);
@@ -282,6 +283,7 @@ CREATE POLICY "Users can delete own channels" ON public.channels FOR DELETE USIN
 CREATE POLICY "Users can view own distributions" ON public.distributions FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Users can create distributions" ON public.distributions FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own distributions" ON public.distributions FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete own distributions" ON public.distributions FOR DELETE USING (auth.uid() = user_id);
 
 -- Credit transactions: users can view their own
 CREATE POLICY "Users can view own transactions" ON public.credit_transactions FOR SELECT USING (auth.uid() = user_id);

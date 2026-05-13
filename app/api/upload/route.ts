@@ -4,32 +4,44 @@
 // Generates presigned URLs for direct client-to-R2 uploads
 
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { requireUser } from '@/lib/supabase/server';
 import { getPresignedUploadUrl, generateSourceKey } from '@/lib/cloudflare/r2';
 import { v4 as uuidv4 } from 'uuid';
+
+export const dynamic = 'force-dynamic';
+
+const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'] as const;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const Body = z.object({
+  filename: z
+    .string()
+    .min(1)
+    .max(255)
+    // Reject path traversal and control characters; allow common filename chars
+    .regex(/^[^\x00-\x1f\\/]+$/, 'Invalid filename'),
+  contentType: z.enum(ALLOWED_TYPES),
+  editId: z
+    .string()
+    .regex(UUID_RE, 'Invalid editId')
+    .optional(),
+});
 
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
 
-    const body = await request.json();
-    const { filename, contentType, editId } = body;
-
-    if (!filename || !contentType) {
+    const json = await request.json().catch(() => null);
+    const parsed = Body.safeParse(json);
+    if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Missing filename or contentType' },
+        { error: 'Invalid request' },
         { status: 400 }
       );
     }
-
-    // Validate content type
-    const allowedTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'];
-    if (!allowedTypes.includes(contentType)) {
-      return NextResponse.json(
-        { error: 'Unsupported video format. Use MP4, MOV, AVI, or WebM.' },
-        { status: 400 }
-      );
-    }
+    const { filename, contentType, editId } = parsed.data;
 
     const id = editId || uuidv4();
     const key = generateSourceKey(user.id, id, filename);

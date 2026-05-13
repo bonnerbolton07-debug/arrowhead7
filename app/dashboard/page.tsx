@@ -1,4 +1,4 @@
-import { Logo, LogoIcon } from '@/components/ui/Logo';
+import { Logo } from '@/components/ui/Logo';
 import { getUser, isSupabaseConfigured } from '@/lib/supabase/server';
 
 export default async function DashboardPage() {
@@ -7,8 +7,26 @@ export default async function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-a7-base to-a7-void">
-      {/* Sidebar */}
-      <aside className="fixed left-0 top-0 bottom-0 w-64 p-6 border-r border-a7-text/[0.04]"
+      {/* Mobile top bar — sidebar collapses below md */}
+      <div
+        className="md:hidden sticky top-0 z-30 flex items-center justify-between px-4 py-3 border-b border-a7-text/[0.04]"
+        style={{ background: 'linear-gradient(180deg, #0E0E0C, #0A0A0A)' }}
+      >
+        <a href="/" className="flex items-center">
+          <Logo variant="dual" size="sm" wordmark />
+        </a>
+        {user && (
+          <a
+            href="/api/auth/signout"
+            className="text-xs text-a7-text/60 hover:text-a7-text px-2 py-1"
+          >
+            Sign out
+          </a>
+        )}
+      </div>
+
+      {/* Sidebar — desktop only */}
+      <aside className="hidden md:block fixed left-0 top-0 bottom-0 w-64 p-6 border-r border-a7-text/[0.04]"
         style={{ background: 'linear-gradient(180deg, #0E0E0C, #0A0A0A)' }}>
         <div className="absolute top-0 left-0 right-0 h-px"
           style={{ background: 'linear-gradient(90deg, rgba(45,212,191,0.15), rgba(184,115,51,0.1), transparent)' }} />
@@ -71,7 +89,7 @@ export default async function DashboardPage() {
         </div>
       </aside>
 
-      <main className="ml-64 p-8">
+      <main className="md:ml-64 p-4 sm:p-6 md:p-8">
         <div className="max-w-5xl">
           <h1 className="text-2xl font-bold mb-2 text-a7-text">Dashboard</h1>
           <p className="text-a7-text/40 text-sm mb-8">
@@ -89,9 +107,8 @@ export default async function DashboardPage() {
                 color: '#E8B06A',
               }}
             >
-              Supabase is not configured yet. Sign-in, history, and rendering won&rsquo;t persist
-              until <code className="text-xs">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
-              <code className="text-xs">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> are set in Vercel.
+              Account services are temporarily unavailable. Sign-in, history, and rendering are
+              offline. Please try again shortly.
             </div>
           )}
 

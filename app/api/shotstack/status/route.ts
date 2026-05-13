@@ -4,6 +4,7 @@
 // Client polls this to check render progress
 
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getRenderStatus } from '@/lib/shotstack/client';
@@ -11,15 +12,21 @@ import { uploadFromUrl } from '@/lib/cloudflare/stream';
 
 export const dynamic = 'force-dynamic';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const Query = z.object({
+  jobId: z.string().regex(UUID_RE, 'Invalid jobId'),
+});
+
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     const supabase = await createServerSupabaseClient();
-    const jobId = request.nextUrl.searchParams.get('jobId');
-
-    if (!jobId) {
-      return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
+    const parsed = Query.safeParse({ jobId: request.nextUrl.searchParams.get('jobId') });
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
+    const { jobId } = parsed.data;
 
     // Fetch the render job
     const { data: job, error: jobError } = await supabase
@@ -40,6 +47,13 @@ export async function GET(request: NextRequest) {
         progress: job.progress,
         error: job.error_message,
       });
+    }
+
+    if (!job.shotstack_render_id) {
+      return NextResponse.json(
+        { error: 'Job not yet submitted to renderer' },
+        { status: 409 }
+      );
     }
 
     // Poll Shotstack

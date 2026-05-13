@@ -33,7 +33,7 @@ export default function LoginForm({
 
     if (!isSupabaseConfigured()) {
       setFormError(
-        'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.'
+        'Sign-in is temporarily unavailable. Please try again shortly.'
       );
       return;
     }
@@ -47,7 +47,10 @@ export default function LoginForm({
         setSubmitting(false);
         return;
       }
-      const target = next && next.startsWith('/') ? next : '/dashboard';
+      const target =
+        next && next.startsWith('/') && !next.startsWith('//')
+          ? next
+          : '/dashboard';
       router.push(target);
       router.refresh();
     } catch (err) {

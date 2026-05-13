@@ -14,7 +14,7 @@ export default function ForgotForm() {
     setFormError(null);
     if (!isSupabaseConfigured()) {
       setFormError(
-        'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.'
+        'Password reset is temporarily unavailable. Please try again shortly.'
       );
       return;
     }
