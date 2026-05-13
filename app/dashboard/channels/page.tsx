@@ -4,6 +4,7 @@ import {
   getUser,
   isSupabaseConfigured,
 } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 import { TIER_LIMITS, type SubscriptionTier, type Platform } from '@/types';
 import {
   YouTubeIcon,
@@ -13,6 +14,7 @@ import {
   LinkedInIcon,
   ShareIcon,
   CheckIcon,
+  CloudIcon,
 } from '@/components/ui/icons';
 
 export const dynamic = 'force-dynamic';
@@ -38,33 +40,107 @@ interface DistributionRow {
   created_at: string;
 }
 
+interface CloudConnection {
+  id: string;
+  provider: string;
+  account_name: string | null;
+  account_email: string | null;
+  connection_status: string;
+}
+
+interface SearchParams {
+  connected?: string;
+  error?: string;
+}
+
 const PLATFORMS: {
   id: Platform;
   name: string;
   description: string;
   Icon: typeof YouTubeIcon;
+  oauthSlug: string;
+  envCheck: string[];
 }[] = [
-  { id: 'youtube', name: 'YouTube', description: 'Long-form + Shorts', Icon: YouTubeIcon },
-  { id: 'tiktok', name: 'TikTok', description: 'Vertical short-form', Icon: TikTokIcon },
-  { id: 'instagram', name: 'Instagram', description: 'Reels, Feed, Stories', Icon: InstagramIcon },
-  { id: 'twitter', name: 'X', description: 'Video posts + threads', Icon: XIcon },
-  { id: 'linkedin', name: 'LinkedIn', description: 'Professional posts', Icon: LinkedInIcon },
+  {
+    id: 'youtube',
+    name: 'YouTube',
+    description: 'Long-form + Shorts',
+    Icon: YouTubeIcon,
+    oauthSlug: 'youtube',
+    envCheck: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  },
+  {
+    id: 'tiktok',
+    name: 'TikTok',
+    description: 'Vertical short-form',
+    Icon: TikTokIcon,
+    oauthSlug: 'tiktok',
+    envCheck: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET'],
+  },
+  {
+    id: 'instagram',
+    name: 'Instagram',
+    description: 'Reels, Feed, Stories',
+    Icon: InstagramIcon,
+    oauthSlug: 'instagram',
+    envCheck: ['FACEBOOK_APP_ID', 'FACEBOOK_APP_SECRET'],
+  },
+  {
+    id: 'twitter',
+    name: 'X',
+    description: 'Video posts + threads',
+    Icon: XIcon,
+    oauthSlug: 'x',
+    envCheck: ['X_CLIENT_ID'],
+  },
+  {
+    id: 'linkedin',
+    name: 'LinkedIn',
+    description: 'Professional posts',
+    Icon: LinkedInIcon,
+    oauthSlug: 'linkedin',
+    envCheck: [],
+  },
+];
+
+const STORAGE_PROVIDERS: {
+  id: string;
+  dbProvider: 'google_drive' | 'dropbox';
+  name: string;
+  description: string;
+  envCheck: string[];
+}[] = [
+  {
+    id: 'google-drive',
+    dbProvider: 'google_drive',
+    name: 'Google Drive',
+    description: 'Import source footage from Drive into the Smart Vault.',
+    envCheck: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  },
+  {
+    id: 'dropbox',
+    dbProvider: 'dropbox',
+    name: 'Dropbox',
+    description: 'Browse and import video files from Dropbox.',
+    envCheck: ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET'],
+  },
 ];
 
 async function fetchData(): Promise<{
   tier: SubscriptionTier;
   channels: ConnectedChannel[];
   distributions: DistributionRow[];
+  clouds: CloudConnection[];
 }> {
   if (!isSupabaseConfigured()) {
-    return { tier: 'free', channels: [], distributions: [] };
+    return { tier: 'free', channels: [], distributions: [], clouds: [] };
   }
   const user = await getUser();
-  if (!user) return { tier: 'free', channels: [], distributions: [] };
+  if (!user) return { tier: 'free', channels: [], distributions: [], clouds: [] };
 
   const supabase = await createServerSupabaseClient();
 
-  const [profileRes, channelsRes, distsRes] = await Promise.all([
+  const [profileRes, channelsRes, distsRes, cloudsRes] = await Promise.all([
     supabase.from('profiles').select('subscription_tier').eq('id', user.id).single(),
     supabase
       .from('channels')
@@ -81,6 +157,11 @@ async function fetchData(): Promise<{
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(50),
+    supabase
+      .from('cloud_connections')
+      .select('id, provider, account_name, account_email, connection_status')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false }),
   ]);
 
   const tier = (profileRes.data?.subscription_tier as SubscriptionTier) ?? 'free';
@@ -89,24 +170,71 @@ async function fetchData(): Promise<{
     tier,
     channels: (channelsRes.data ?? []) as ConnectedChannel[],
     distributions: (distsRes.data ?? []) as DistributionRow[],
+    clouds: (cloudsRes.data ?? []) as CloudConnection[],
   };
 }
 
-export default async function ChannelsPage() {
-  const { tier, channels, distributions } = await fetchData();
+function envSet(keys: string[]): boolean {
+  if (keys.length === 0) return false;
+  return keys.every((k) => Boolean(process.env[k]));
+}
+
+export default async function ChannelsPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const sp = await searchParams;
+  if (isSupabaseConfigured()) {
+    const user = await getUser();
+    if (!user) redirect('/auth/login?next=/dashboard/channels');
+  }
+
+  const { tier, channels, distributions, clouds } = await fetchData();
   const limit = TIER_LIMITS[tier].max_channels;
   const atLimit = limit !== -1 && channels.length >= limit;
+
+  const channelByPlatform = new Map(channels.map((c) => [c.platform, c]));
+  const cloudByProvider = new Map(clouds.map((c) => [c.provider, c]));
 
   return (
     <DashboardShell
       title="Channels"
-      subtitle="Connect your social accounts to push edits directly from A7."
+      subtitle="Connect your social accounts and cloud storage to push edits directly from A7."
     >
       <div className="max-w-6xl space-y-10">
-        {/* Connect new platforms */}
+        {/* Connection feedback */}
+        {sp.connected && (
+          <div
+            className="px-4 py-3 rounded-md text-sm"
+            style={{
+              background:
+                'linear-gradient(135deg, rgba(45,212,191,0.08), rgba(45,212,191,0.02))',
+              border: '1px solid rgba(45,212,191,0.25)',
+              color: '#5BE8D5',
+            }}
+          >
+            Connected {sp.connected.replace(/_/g, ' ')} successfully.
+          </div>
+        )}
+        {sp.error && (
+          <div
+            className="px-4 py-3 rounded-md text-sm"
+            style={{
+              background:
+                'linear-gradient(135deg, rgba(212,148,74,0.08), rgba(212,148,74,0.02))',
+              border: '1px solid rgba(212,148,74,0.25)',
+              color: '#E8B06A',
+            }}
+          >
+            Connection failed: {sp.error}
+          </div>
+        )}
+
+        {/* Publishing Platforms */}
         <section>
           <div className="flex items-end justify-between mb-4">
-            <h2 className="text-base font-semibold text-a7-text">Available platforms</h2>
+            <h2 className="text-base font-semibold text-a7-text">Publishing platforms</h2>
             <div className="text-xs text-a7-text/40">
               {limit === -1
                 ? `${channels.length} connected · Unlimited`
@@ -116,7 +244,8 @@ export default async function ChannelsPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {PLATFORMS.map((p) => {
-              const existing = channels.find((c) => c.platform === p.id);
+              const existing = channelByPlatform.get(p.id);
+              const ready = envSet(p.envCheck);
               return (
                 <PlatformCard
                   key={p.id}
@@ -125,6 +254,7 @@ export default async function ChannelsPage() {
                   status={existing?.connection_status}
                   accountName={existing?.platform_account_name}
                   disabled={!existing && atLimit}
+                  ready={ready}
                 />
               );
             })}
@@ -146,6 +276,32 @@ export default async function ChannelsPage() {
               </a>
             </div>
           )}
+        </section>
+
+        {/* Cloud Storage */}
+        <section>
+          <div className="flex items-end justify-between mb-4">
+            <h2 className="text-base font-semibold text-a7-text">Cloud storage</h2>
+            <div className="text-xs text-a7-text/40">
+              Import source footage into your vault
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {STORAGE_PROVIDERS.map((p) => {
+              const connected = cloudByProvider.get(p.dbProvider);
+              const ready = envSet(p.envCheck);
+              return (
+                <StorageCard
+                  key={p.id}
+                  provider={p}
+                  connected={!!connected}
+                  accountLabel={connected?.account_email ?? connected?.account_name ?? null}
+                  ready={ready}
+                />
+              );
+            })}
+          </div>
         </section>
 
         {/* Distribution history */}
@@ -184,13 +340,23 @@ function PlatformCard({
   status,
   accountName,
   disabled,
+  ready,
 }: {
-  platform: { id: Platform; name: string; description: string; Icon: typeof YouTubeIcon };
+  platform: {
+    id: Platform;
+    name: string;
+    description: string;
+    Icon: typeof YouTubeIcon;
+    oauthSlug: string;
+    envCheck: string[];
+  };
   connected: boolean;
   status?: string;
   accountName?: string;
   disabled: boolean;
+  ready: boolean;
 }) {
+  const connectHref = ready ? `/api/auth/${platform.oauthSlug}/connect` : undefined;
   return (
     <div
       className="relative overflow-hidden rounded-lg p-5 flex flex-col"
@@ -215,7 +381,8 @@ function PlatformCard({
       <div className="flex items-start justify-between mb-4">
         <platform.Icon size={28} />
         {connected && (
-          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-mono px-2 py-0.5 rounded-full"
+          <span
+            className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-mono px-2 py-0.5 rounded-full"
             style={{
               background: 'rgba(45,212,191,0.08)',
               color: '#2DD4BF',
@@ -233,28 +400,133 @@ function PlatformCard({
           ? `@${accountName.replace(/^@/, '')}`
           : platform.description}
       </p>
+      {!ready && !connected && platform.envCheck.length > 0 && (
+        <p className="text-[10px] text-a7-text/30 mb-2 font-mono">
+          Set {platform.envCheck.join(' + ')} in env
+        </p>
+      )}
 
-      <button
-        disabled={disabled}
-        className="w-full px-3 py-2 rounded-md text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-        style={
-          connected
-            ? {
-                background:
-                  'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
-                border: '1px solid rgba(245,240,232,0.06)',
-                color: 'rgba(245,240,232,0.5)',
-              }
-            : {
-                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-                color: '#0A0A0A',
-                boxShadow: '0 0 12px rgba(45,212,191,0.2)',
-              }
-        }
-        title={connected ? 'Manage in settings' : 'OAuth coming soon'}
-      >
-        {connected ? 'Manage' : disabled ? 'Plan limit reached' : 'Connect'}
-      </button>
+      {connectHref ? (
+        <a
+          href={disabled ? undefined : connectHref}
+          aria-disabled={disabled}
+          className="w-full px-3 py-2 rounded-md text-xs font-medium transition-all text-center disabled:opacity-40 disabled:cursor-not-allowed"
+          style={
+            connected
+              ? {
+                  background:
+                    'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+                  border: '1px solid rgba(245,240,232,0.06)',
+                  color: 'rgba(245,240,232,0.5)',
+                }
+              : {
+                  background: disabled
+                    ? 'rgba(245,240,232,0.04)'
+                    : 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                  color: disabled ? 'rgba(245,240,232,0.4)' : '#0A0A0A',
+                  boxShadow: disabled ? 'none' : '0 0 12px rgba(45,212,191,0.2)',
+                  pointerEvents: disabled ? 'none' : 'auto',
+                }
+          }
+        >
+          {connected ? 'Reconnect' : disabled ? 'Plan limit reached' : 'Connect'}
+        </a>
+      ) : (
+        <button
+          disabled
+          className="w-full px-3 py-2 rounded-md text-xs font-medium opacity-40 cursor-not-allowed"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+            border: '1px solid rgba(245,240,232,0.06)',
+            color: 'rgba(245,240,232,0.5)',
+          }}
+          title="OAuth credentials not configured"
+        >
+          Not configured
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StorageCard({
+  provider,
+  connected,
+  accountLabel,
+  ready,
+}: {
+  provider: {
+    id: string;
+    name: string;
+    description: string;
+    envCheck: string[];
+  };
+  connected: boolean;
+  accountLabel: string | null;
+  ready: boolean;
+}) {
+  const connectHref = ready ? `/api/auth/${provider.id}/connect?next=/vault` : undefined;
+  return (
+    <div
+      className="relative overflow-hidden rounded-lg p-5 flex items-start gap-4"
+      style={{
+        background: connected
+          ? 'linear-gradient(135deg, rgba(184,115,51,0.05), rgba(184,115,51,0.01))'
+          : 'linear-gradient(180deg, #10100E, #0C0C0A)',
+        border: connected
+          ? '1px solid rgba(184,115,51,0.15)'
+          : '1px solid rgba(245,240,232,0.05)',
+      }}
+    >
+      <div
+        className="absolute top-0 left-0 right-0 h-px"
+        style={{
+          background: connected
+            ? 'linear-gradient(90deg, rgba(184,115,51,0.3), transparent)'
+            : 'linear-gradient(90deg, rgba(245,240,232,0.08), transparent)',
+        }}
+      />
+      <CloudIcon size={28} gradient="copper" className="flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <h3 className="font-semibold text-sm text-a7-text mb-1">{provider.name}</h3>
+        <p className="text-xs text-a7-text/40 mb-2">{provider.description}</p>
+        {connected && accountLabel && (
+          <p className="text-[10px] text-grad-copper font-mono mb-3">{accountLabel}</p>
+        )}
+        {!ready && (
+          <p className="text-[10px] text-a7-text/30 font-mono mb-3">
+            Set {provider.envCheck.join(' + ')} in env
+          </p>
+        )}
+      </div>
+      <div className="flex-shrink-0">
+        {connectHref ? (
+          <a
+            href={connectHref}
+            className="text-xs px-3 py-1.5 rounded-md font-medium transition-all hover:scale-[1.02]"
+            style={{
+              background:
+                'linear-gradient(135deg, rgba(184,115,51,0.15), rgba(184,115,51,0.05))',
+              border: '1px solid rgba(184,115,51,0.3)',
+              color: '#D4944A',
+            }}
+          >
+            {connected ? 'Reconnect' : 'Connect'}
+          </a>
+        ) : (
+          <span
+            className="text-xs px-3 py-1.5 rounded-md font-medium opacity-40"
+            style={{
+              background: 'rgba(245,240,232,0.04)',
+              border: '1px solid rgba(245,240,232,0.06)',
+              color: 'rgba(245,240,232,0.5)',
+            }}
+          >
+            Not configured
+          </span>
+        )}
+      </div>
     </div>
   );
 }

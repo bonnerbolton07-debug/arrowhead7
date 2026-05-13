@@ -3,6 +3,7 @@
 // =============================================================================
 // For server-side jobs that need to bypass RLS — webhook handlers, scheduled
 // tasks, system-initiated mutations. NEVER expose to the browser.
+// Callers must enforce their own authorization.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -28,3 +29,5 @@ export function getAdminClient(): SupabaseClient {
   });
   return _admin;
 }
+
+export const getSupabaseAdmin = getAdminClient;

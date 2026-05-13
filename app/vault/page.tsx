@@ -4,6 +4,7 @@ import {
   getUser,
   isSupabaseConfigured,
 } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 import {
   GoogleDriveIcon,
   DropboxIcon,
@@ -13,6 +14,7 @@ import {
   CloudIcon,
 } from '@/components/ui/icons';
 import { TIER_LIMITS, type SubscriptionTier } from '@/types';
+import { VaultBrowser } from './VaultBrowser';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,18 +37,21 @@ const PROVIDERS: {
   name: string;
   description: string;
   Icon: typeof GoogleDriveIcon;
+  oauthSlug?: string;
 }[] = [
   {
     id: 'google_drive',
     name: 'Google Drive',
     description: 'Pull footage from My Drive or shared folders.',
     Icon: GoogleDriveIcon,
+    oauthSlug: 'google-drive',
   },
   {
     id: 'dropbox',
     name: 'Dropbox',
     description: 'Sync your camera roll and team drives.',
     Icon: DropboxIcon,
+    oauthSlug: 'dropbox',
   },
   {
     id: 'icloud',
@@ -60,15 +65,17 @@ async function fetchData(): Promise<{
   tier: SubscriptionTier;
   connections: StorageRow[];
   vaultUsedBytes: number;
+  browserConnected: Record<string, { account: string }>;
 }> {
   if (!isSupabaseConfigured()) {
-    return { tier: 'free', connections: [], vaultUsedBytes: 0 };
+    return { tier: 'free', connections: [], vaultUsedBytes: 0, browserConnected: {} };
   }
   const user = await getUser();
-  if (!user) return { tier: 'free', connections: [], vaultUsedBytes: 0 };
+  if (!user)
+    return { tier: 'free', connections: [], vaultUsedBytes: 0, browserConnected: {} };
 
   const supabase = await createServerSupabaseClient();
-  const [profileRes, connsRes] = await Promise.all([
+  const [profileRes, legacyRes, cloudsRes] = await Promise.all([
     supabase.from('profiles').select('subscription_tier').eq('id', user.id).single(),
     supabase
       .from('storage_connections')
@@ -77,17 +84,70 @@ async function fetchData(): Promise<{
       )
       .eq('user_id', user.id)
       .order('created_at', { ascending: false }),
+    supabase
+      .from('cloud_connections')
+      .select(
+        'id, provider, account_email, account_name, connection_status, created_at, updated_at'
+      )
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false }),
   ]);
 
   const tier = (profileRes.data?.subscription_tier as SubscriptionTier) ?? 'free';
-  const connections = (connsRes.data ?? []) as StorageRow[];
-  const vaultUsedBytes = connections.reduce((sum, c) => sum + (c.storage_used_bytes ?? 0), 0);
+  const legacy = (legacyRes.data ?? []) as StorageRow[];
+  const clouds = (cloudsRes.data ?? []) as Array<{
+    id: string;
+    provider: string;
+    account_email: string | null;
+    account_name: string | null;
+    connection_status: string;
+    created_at: string;
+  }>;
 
-  return { tier, connections, vaultUsedBytes };
+  // Merge: cloud_connections (real OAuth) takes precedence per provider.
+  const byProvider = new Map<string, StorageRow>();
+  for (const row of legacy) byProvider.set(row.provider, row);
+  for (const c of clouds) {
+    byProvider.set(c.provider, {
+      id: c.id,
+      provider: c.provider as Provider,
+      account_email: c.account_email,
+      account_name: c.account_name,
+      connection_status: c.connection_status,
+      storage_used_bytes:
+        byProvider.get(c.provider)?.storage_used_bytes ?? 0,
+      storage_quota_bytes:
+        byProvider.get(c.provider)?.storage_quota_bytes ?? null,
+      last_sync_at: byProvider.get(c.provider)?.last_sync_at ?? null,
+      created_at: c.created_at,
+    });
+  }
+
+  const connections = Array.from(byProvider.values());
+  const vaultUsedBytes = connections.reduce(
+    (sum, c) => sum + (c.storage_used_bytes ?? 0),
+    0
+  );
+
+  const browserConnected = clouds.reduce<Record<string, { account: string }>>(
+    (acc, c) => {
+      const account = c.account_email ?? c.account_name ?? 'Connected';
+      acc[c.provider] = { account };
+      return acc;
+    },
+    {}
+  );
+
+  return { tier, connections, vaultUsedBytes, browserConnected };
 }
 
 export default async function VaultPage() {
-  const { tier, connections, vaultUsedBytes } = await fetchData();
+  if (isSupabaseConfigured()) {
+    const user = await getUser();
+    if (!user) redirect('/auth/login?next=/vault');
+  }
+
+  const { tier, connections, vaultUsedBytes, browserConnected } = await fetchData();
   const limits = TIER_LIMITS[tier];
   const quotaBytes = limits.storage_gb === -1 ? -1 : limits.storage_gb * 1024 ** 3;
 
@@ -95,9 +155,7 @@ export default async function VaultPage() {
     <DashboardShell
       title="Smart Vault"
       subtitle="Your footage, AI-tagged and instantly searchable. Connect cloud storage to bring everything in."
-      actions={
-        <SearchInput placeholder="Search vault…" />
-      }
+      actions={<SearchInput placeholder="Search vault…" />}
     >
       <div className="max-w-6xl space-y-10">
         {/* Usage card */}
@@ -127,11 +185,7 @@ export default async function VaultPage() {
             {PROVIDERS.map((p) => {
               const existing = connections.find((c) => c.provider === p.id);
               return (
-                <ProviderCard
-                  key={p.id}
-                  provider={p}
-                  connection={existing}
-                />
+                <ProviderCard key={p.id} provider={p} connection={existing} />
               );
             })}
           </div>
@@ -142,7 +196,10 @@ export default async function VaultPage() {
           <h2 className="text-base font-semibold text-a7-text mb-4">
             Browse storage
           </h2>
-          <BrowsePanel hasConnections={connections.length > 0} />
+          <BrowsePanel
+            hasConnections={Object.keys(browserConnected).length > 0}
+            connected={browserConnected}
+          />
         </section>
       </div>
     </DashboardShell>
@@ -229,11 +286,20 @@ function ProviderCard({
   provider,
   connection,
 }: {
-  provider: { id: Provider; name: string; description: string; Icon: typeof GoogleDriveIcon };
+  provider: {
+    id: Provider;
+    name: string;
+    description: string;
+    Icon: typeof GoogleDriveIcon;
+    oauthSlug?: string;
+  };
   connection?: StorageRow;
 }) {
   const connected = !!connection;
   const usedGb = connection ? connection.storage_used_bytes / 1024 ** 3 : 0;
+  const connectHref = provider.oauthSlug
+    ? `/api/auth/${provider.oauthSlug}/connect?next=/vault`
+    : undefined;
   return (
     <div
       className="relative overflow-hidden rounded-lg p-5 flex flex-col"
@@ -280,39 +346,59 @@ function ProviderCard({
           : provider.description}
       </p>
 
-      {connected && (
+      {connected && usedGb > 0 && (
         <div className="text-[10px] text-a7-text/40 font-mono mb-3">
           {usedGb.toFixed(1)} GB indexed
         </div>
       )}
 
-      <button
-        disabled
-        className="w-full px-3 py-2 rounded-md text-xs font-medium transition-all disabled:cursor-not-allowed"
-        style={
-          connected
-            ? {
-                background:
-                  'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
-                border: '1px solid rgba(245,240,232,0.06)',
-                color: 'rgba(245,240,232,0.5)',
-              }
-            : {
-                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-                color: '#0A0A0A',
-                boxShadow: '0 0 12px rgba(45,212,191,0.2)',
-                opacity: 0.5,
-              }
-        }
-        title={connected ? 'Manage connection' : 'OAuth coming soon'}
-      >
-        {connected ? 'Manage' : 'Connect'}
-      </button>
+      {connectHref ? (
+        <a
+          href={connectHref}
+          className="w-full px-3 py-2 rounded-md text-xs font-medium transition-all text-center"
+          style={
+            connected
+              ? {
+                  background:
+                    'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+                  border: '1px solid rgba(245,240,232,0.06)',
+                  color: 'rgba(245,240,232,0.5)',
+                }
+              : {
+                  background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                  color: '#0A0A0A',
+                  boxShadow: '0 0 12px rgba(45,212,191,0.2)',
+                }
+          }
+        >
+          {connected ? 'Reconnect' : 'Connect'}
+        </a>
+      ) : (
+        <button
+          disabled
+          className="w-full px-3 py-2 rounded-md text-xs font-medium opacity-40 cursor-not-allowed"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+            border: '1px solid rgba(245,240,232,0.06)',
+            color: 'rgba(245,240,232,0.5)',
+          }}
+          title="Coming soon"
+        >
+          Coming soon
+        </button>
+      )}
     </div>
   );
 }
 
-function BrowsePanel({ hasConnections }: { hasConnections: boolean }) {
+function BrowsePanel({
+  hasConnections,
+  connected,
+}: {
+  hasConnections: boolean;
+  connected: Record<string, { account: string }>;
+}) {
   if (!hasConnections) {
     return (
       <div
@@ -327,39 +413,15 @@ function BrowsePanel({ hasConnections }: { hasConnections: boolean }) {
           Connect a storage provider above to browse and import footage straight
           into the editor.
         </p>
+        <div className="mt-4 text-[10px] text-a7-text/30 font-mono">
+          <VaultIcon size={14} gradient="copper" className="inline-block mr-1" />
+          Files are streamed into your private R2 bucket — never the browser.
+        </div>
       </div>
     );
   }
 
-  // Placeholder folder grid — wired up once OAuth lands.
-  const FOLDERS = [
-    'Camera Roll',
-    'Drone footage',
-    '2025 Shoots',
-    'B-roll archive',
-    'Client work',
-    'Tutorials',
-  ];
-
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-      {FOLDERS.map((f) => (
-        <button
-          key={f}
-          disabled
-          className="relative overflow-hidden rounded-lg p-4 text-left transition-all opacity-60"
-          style={{
-            background: 'linear-gradient(180deg, #10100E, #0C0C0A)',
-            border: '1px solid rgba(245,240,232,0.05)',
-          }}
-        >
-          <VaultIcon size={20} gradient="copper" className="mb-2" />
-          <div className="text-sm font-medium text-a7-text/80 truncate">{f}</div>
-          <div className="text-[10px] text-a7-text/30 mt-1">— files</div>
-        </button>
-      ))}
-    </div>
-  );
+  return <VaultBrowser connected={connected} />;
 }
 
 function SearchInput({ placeholder }: { placeholder: string }) {
