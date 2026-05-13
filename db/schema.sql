@@ -18,11 +18,14 @@ CREATE TABLE public.profiles (
   avatar_url TEXT,
 
   -- Subscription
-  subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'creator', 'pro', 'enterprise')),
+  subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'pro', 'studio')),
+  subscription_status TEXT NOT NULL DEFAULT 'active' CHECK (subscription_status IN ('active', 'cancelled', 'past_due', 'trialing', 'incomplete')),
   stripe_customer_id TEXT UNIQUE,
+  stripe_subscription_id TEXT UNIQUE,
+  current_period_end TIMESTAMPTZ,
 
-  -- Credits
-  credits_remaining INTEGER NOT NULL DEFAULT 3,
+  -- Credits (Free: 5/mo, Pro: 50/mo, Studio: unlimited represented as -1)
+  credits_remaining INTEGER NOT NULL DEFAULT 5,
   credits_used_total INTEGER NOT NULL DEFAULT 0,
 
   -- Preferences
@@ -207,15 +210,71 @@ CREATE TABLE public.credit_transactions (
 CREATE TABLE public.subscriptions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  tier TEXT NOT NULL CHECK (tier IN ('free', 'creator', 'pro', 'enterprise')),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'past_due', 'trialing')),
-  credits_per_month INTEGER NOT NULL DEFAULT 3,
-  credits_remaining INTEGER NOT NULL DEFAULT 3,
+  tier TEXT NOT NULL CHECK (tier IN ('free', 'pro', 'studio')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'past_due', 'trialing', 'incomplete')),
+  credits_per_month INTEGER NOT NULL DEFAULT 5,
+  credits_remaining INTEGER NOT NULL DEFAULT 5,
   current_period_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   current_period_end TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
   stripe_subscription_id TEXT UNIQUE,
   stripe_customer_id TEXT,
+  stripe_price_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Storage Connections ───────────────────────────────────────────────────
+-- Cloud-storage integrations (Google Drive, Dropbox, iCloud, etc.)
+
+CREATE TABLE public.storage_connections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google_drive', 'dropbox', 'icloud', 'onedrive')),
+  account_email TEXT,
+  account_name TEXT,
+  access_token_encrypted TEXT,
+  refresh_token_encrypted TEXT,
+  token_expires_at TIMESTAMPTZ,
+  scopes TEXT[] NOT NULL DEFAULT '{}',
+  connection_status TEXT NOT NULL DEFAULT 'connected' CHECK (connection_status IN (
+    'connected', 'disconnected', 'expired', 'error'
+  )),
+  storage_used_bytes BIGINT NOT NULL DEFAULT 0,
+  storage_quota_bytes BIGINT,
+  last_sync_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, provider, account_email)
+);
+
+-- ─── API Keys ───────────────────────────────────────────────────────────────
+-- Programmatic access tokens (Studio tier)
+
+CREATE TABLE public.api_keys (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,                -- First 8 chars for display: "a7sk_abc..."
+  hashed_key TEXT NOT NULL,            -- bcrypt/sha256 of full key
+  scopes TEXT[] NOT NULL DEFAULT '{read,write}',
+  last_used_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Notification Preferences ──────────────────────────────────────────────
+
+CREATE TABLE public.notification_preferences (
+  user_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+  email_render_complete BOOLEAN NOT NULL DEFAULT TRUE,
+  email_render_failed BOOLEAN NOT NULL DEFAULT TRUE,
+  email_billing BOOLEAN NOT NULL DEFAULT TRUE,
+  email_product_updates BOOLEAN NOT NULL DEFAULT FALSE,
+  email_security_alerts BOOLEAN NOT NULL DEFAULT TRUE,
+  in_app_render_complete BOOLEAN NOT NULL DEFAULT TRUE,
+  in_app_render_failed BOOLEAN NOT NULL DEFAULT TRUE,
+  in_app_distribution_done BOOLEAN NOT NULL DEFAULT TRUE,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -240,6 +299,14 @@ CREATE INDEX idx_distributions_status ON public.distributions(status);
 CREATE INDEX idx_credit_transactions_user_id ON public.credit_transactions(user_id);
 CREATE INDEX idx_credit_transactions_created_at ON public.credit_transactions(created_at DESC);
 
+CREATE INDEX idx_subscriptions_user_id ON public.subscriptions(user_id);
+CREATE INDEX idx_subscriptions_stripe_customer ON public.subscriptions(stripe_customer_id);
+
+CREATE INDEX idx_storage_connections_user_id ON public.storage_connections(user_id);
+
+CREATE INDEX idx_api_keys_user_id ON public.api_keys(user_id);
+CREATE INDEX idx_api_keys_prefix ON public.api_keys(prefix);
+
 -- ─── Row Level Security ─────────────────────────────────────────────────────
 -- Users can only access their own data
 
@@ -251,6 +318,9 @@ ALTER TABLE public.channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.distributions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.storage_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_preferences ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users can read/update their own profile
 CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
@@ -289,6 +359,23 @@ CREATE POLICY "Users can create own transactions" ON public.credit_transactions 
 
 -- Subscriptions: users can view their own
 CREATE POLICY "Users can view own subscription" ON public.subscriptions FOR SELECT USING (auth.uid() = user_id);
+
+-- Storage connections: users can CRUD their own
+CREATE POLICY "Users view own storage connections" ON public.storage_connections FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users insert own storage connections" ON public.storage_connections FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users update own storage connections" ON public.storage_connections FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users delete own storage connections" ON public.storage_connections FOR DELETE USING (auth.uid() = user_id);
+
+-- API keys: users can manage their own
+CREATE POLICY "Users view own api keys" ON public.api_keys FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users insert own api keys" ON public.api_keys FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users update own api keys" ON public.api_keys FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users delete own api keys" ON public.api_keys FOR DELETE USING (auth.uid() = user_id);
+
+-- Notification preferences: users can manage their own
+CREATE POLICY "Users view own notification prefs" ON public.notification_preferences FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users insert own notification prefs" ON public.notification_preferences FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users update own notification prefs" ON public.notification_preferences FOR UPDATE USING (auth.uid() = user_id);
 
 -- ─── Triggers ───────────────────────────────────────────────────────────────
 

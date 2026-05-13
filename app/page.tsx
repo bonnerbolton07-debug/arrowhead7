@@ -19,6 +19,7 @@ import {
   EditorMockup,
   VaultMockup,
 } from '@/components/ui/PreviewMockups';
+import { PricingCards } from '@/components/pricing/PricingCards';
 
 export default function LandingPage() {
   return (
@@ -83,7 +84,7 @@ function Nav() {
           <a href="#use-cases" className="text-a7-text/50 hover:text-a7-text transition-colors">
             Use cases
           </a>
-          <a href="#pricing" className="text-a7-text/50 hover:text-a7-text transition-colors">
+          <a href="/pricing" className="text-a7-text/50 hover:text-a7-text transition-colors">
             Pricing
           </a>
         </div>
@@ -844,55 +845,6 @@ function SocialProof() {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 function Pricing() {
-  const tiers = [
-    {
-      name: 'Free',
-      price: '$0',
-      cadence: 'forever',
-      desc: 'Try the full pipeline.',
-      features: ['3 edits / month', '720p watermarked export', '1 Style DNA profile', 'Community support'],
-      cta: 'Start free',
-      ctaHref: '/auth/signup',
-      accent: 'teal' as const,
-      popular: false,
-    },
-    {
-      name: 'Creator',
-      price: '$29',
-      cadence: '/month',
-      desc: 'For weekly publishers.',
-      features: [
-        '50 edits / month',
-        '4K watermark-free',
-        'Unlimited Style DNA',
-        'Direct channel publish',
-        'Smart Vault (500 GB)',
-      ],
-      cta: 'Go Creator',
-      ctaHref: '/auth/signup',
-      accent: 'dual' as const,
-      popular: true,
-    },
-    {
-      name: 'Pro',
-      price: '$99',
-      cadence: '/month',
-      desc: 'For full-time studios.',
-      features: [
-        'Unlimited edits',
-        '4K + ProRes export',
-        'Team Style DNA library',
-        'Priority cloud render',
-        'Smart Vault (5 TB)',
-        'API access',
-      ],
-      cta: 'Go Pro',
-      ctaHref: '/auth/signup',
-      accent: 'copper' as const,
-      popular: false,
-    },
-  ];
-
   return (
     <section id="pricing" className="px-6 sm:px-8 py-16 sm:py-24">
       <div className="max-w-7xl mx-auto">
@@ -909,96 +861,7 @@ function Pricing() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5">
-          {tiers.map((t) => (
-            <div
-              key={t.name}
-              className="relative overflow-hidden rounded-2xl p-6 sm:p-7 flex flex-col"
-              style={{
-                background:
-                  t.accent === 'teal'
-                    ? 'linear-gradient(180deg, rgba(13,92,90,0.18), rgba(16,16,14,0.6))'
-                    : t.accent === 'copper'
-                    ? 'linear-gradient(180deg, rgba(74,37,16,0.18), rgba(16,16,14,0.6))'
-                    : 'linear-gradient(180deg, rgba(45,212,191,0.12), rgba(184,115,51,0.08), rgba(16,16,14,0.6))',
-                border: t.popular
-                  ? '1px solid rgba(45,212,191,0.3)'
-                  : '1px solid rgba(245,240,232,0.06)',
-                boxShadow: t.popular
-                  ? '0 0 30px rgba(45,212,191,0.12), 0 0 60px rgba(184,115,51,0.06)'
-                  : 'none',
-              }}
-            >
-              {t.popular && (
-                <div
-                  className="absolute top-3 right-3 px-2 py-0.5 rounded-full text-[10px] font-mono text-a7-void"
-                  style={{
-                    background: 'linear-gradient(135deg, #2DD4BF, #B87333)',
-                  }}
-                >
-                  POPULAR
-                </div>
-              )}
-              <div
-                className="absolute top-0 left-0 right-0 h-px"
-                style={{
-                  background:
-                    t.accent === 'teal'
-                      ? 'linear-gradient(90deg, rgba(45,212,191,0.4), transparent)'
-                      : t.accent === 'copper'
-                      ? 'linear-gradient(90deg, rgba(184,115,51,0.4), transparent)'
-                      : 'linear-gradient(90deg, rgba(45,212,191,0.4), rgba(184,115,51,0.3), transparent)',
-                }}
-              />
-              <div className="text-sm font-semibold text-a7-text/80 mb-1">{t.name}</div>
-              <div className="text-xs text-a7-text/40 mb-5">{t.desc}</div>
-              <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-bold text-a7-text">{t.price}</span>
-                <span className="text-sm text-a7-text/40">{t.cadence}</span>
-              </div>
-              <ul className="space-y-2.5 mb-7 flex-1">
-                {t.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm text-a7-text/70">
-                    <span className="mt-0.5 shrink-0">
-                      <CheckIcon
-                        size={14}
-                        gradient={t.accent === 'copper' ? 'copper' : 'teal'}
-                      />
-                    </span>
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              <a
-                href={t.ctaHref}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-md font-semibold text-sm transition-all"
-                style={
-                  t.popular
-                    ? {
-                        background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-                        color: '#0A0A0A',
-                        boxShadow: '0 0 20px rgba(45,212,191,0.3)',
-                      }
-                    : t.accent === 'copper'
-                    ? {
-                        background:
-                          'linear-gradient(135deg, rgba(184,115,51,0.1), rgba(184,115,51,0.03))',
-                        border: '1px solid rgba(184,115,51,0.25)',
-                        color: '#D4944A',
-                      }
-                    : {
-                        background:
-                          'linear-gradient(135deg, rgba(45,212,191,0.08), rgba(45,212,191,0.02))',
-                        border: '1px solid rgba(45,212,191,0.2)',
-                        color: '#5BE8D5',
-                      }
-                }
-              >
-                {t.cta}
-              </a>
-            </div>
-          ))}
-        </div>
+        <PricingCards />
 
         <p className="text-center text-xs text-a7-text/30 mt-8">
           Need an Enterprise / on-prem plan?{' '}
