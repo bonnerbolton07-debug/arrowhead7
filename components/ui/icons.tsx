@@ -186,3 +186,269 @@ export function BoltIcon({ size = 24, className = '', gradient = 'teal' }: IconP
     </svg>
   );
 }
+
+export function ClockIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('clock');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="12" cy="12" r="9" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <polyline points="12,7 12,12 16,14" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function SettingsIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('settings');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="12" cy="12" r="3" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke={`url(#${id})`} strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FilmIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('film');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <line x1="3" y1="9" x2="21" y2="9" stroke={`url(#${id})`} strokeWidth="1.5" />
+      <line x1="3" y1="15" x2="21" y2="15" stroke={`url(#${id})`} strokeWidth="1.5" />
+      <line x1="9" y1="4" x2="9" y2="20" stroke={`url(#${id})`} strokeWidth="1.5" />
+      <line x1="15" y1="4" x2="15" y2="20" stroke={`url(#${id})`} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+export function CloudIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('cloud');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M7 18h11a4 4 0 0 0 .4-7.98 6 6 0 0 0-11.8 1.27A4 4 0 0 0 7 18z" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('search');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="11" cy="11" r="6" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <line x1="15.5" y1="15.5" x2="20" y2="20" stroke={`url(#${id})`} strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function PlusIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('plus');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <line x1="12" y1="5" x2="12" y2="19" stroke={`url(#${id})`} strokeWidth="2.5" strokeLinecap="round" />
+      <line x1="5" y1="12" x2="19" y2="12" stroke={`url(#${id})`} strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ size = 24, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('trash');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <polyline points="3,6 5,6 21,6" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M10 11v6M14 11v6" stroke={`url(#${id})`} strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" fill="none" stroke={`url(#${id})`} strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+export function EditIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('edit');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M12 20h9" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function UserIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('user');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="12" cy="8" r="4" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function BellIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('bell');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 3h16l-2-3z" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M10 21a2 2 0 0 0 4 0" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function KeyIcon({ size = 24, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('key');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="8" cy="15" r="4" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <path d="M10.8 12.2L20 3l2 2-2 2 2 2-3 3-2-2-2 2-1.2-1.2" fill="none" stroke={`url(#${id})`} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function CrownIcon({ size = 24, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('crown');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M3 17h18M4 7l4 4 4-6 4 6 4-4-2 10H6L4 7z" fill={`url(#${id})`} fillOpacity="0.2" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function YouTubeIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('youtube');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#B87333" />
+          <stop offset="100%" stopColor="#D4944A" />
+        </linearGradient>
+      </defs>
+      <rect x="2" y="5" width="20" height="14" rx="3" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <polygon points="10,9 16,12 10,15" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function TikTokIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('tiktok');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#2DD4BF" />
+          <stop offset="100%" stopColor="#B87333" />
+        </linearGradient>
+      </defs>
+      <path d="M14 4v9.5a3.5 3.5 0 1 1-3.5-3.5h.5V13a1.5 1.5 0 1 0 1.5 1.5V4h2c.3 1.7 1.5 3 3 3.3v2c-1.4-.1-2.6-.6-3.5-1.3z" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function InstagramIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('instagram');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#B87333" />
+          <stop offset="100%" stopColor="#D4944A" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <circle cx="12" cy="12" r="4" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <circle cx="17.5" cy="6.5" r="1.2" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function XIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('x');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#5BE8D5" />
+          <stop offset="100%" stopColor="#1a9e8f" />
+        </linearGradient>
+      </defs>
+      <path d="M4 4l16 16M20 4L4 20" stroke={`url(#${id})`} strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function LinkedInIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('linkedin');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1a9e8f" />
+          <stop offset="100%" stopColor="#5BE8D5" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <rect x="6.5" y="10" width="2" height="7" fill={`url(#${id})`} />
+      <circle cx="7.5" cy="7.5" r="1.2" fill={`url(#${id})`} />
+      <path d="M11 17v-7h2v1c.5-.7 1.5-1.2 2.5-1.2 2 0 3 1.4 3 3.4V17h-2v-3.4c0-1.2-.5-1.8-1.5-1.8s-1.5.6-1.5 1.8V17h-2z" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function GoogleDriveIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('gdrive');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1a9e8f" />
+          <stop offset="100%" stopColor="#5BE8D5" />
+        </linearGradient>
+      </defs>
+      <polygon points="8,3 16,3 22,14 18,21 6,21 2,14" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+      <line x1="8" y1="3" x2="14" y2="14" stroke={`url(#${id})`} strokeWidth="1.6" />
+      <line x1="16" y1="3" x2="10" y2="14" stroke={`url(#${id})`} strokeWidth="1.6" />
+      <line x1="2" y1="14" x2="22" y2="14" stroke={`url(#${id})`} strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+export function DropboxIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('dropbox');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1a9e8f" />
+          <stop offset="100%" stopColor="#5BE8D5" />
+        </linearGradient>
+      </defs>
+      <polygon points="6,4 12,8 6,12 0,8" fill={`url(#${id})`} transform="translate(2 2)" />
+      <polygon points="6,4 12,8 6,12 0,8" fill={`url(#${id})`} transform="translate(10 2)" />
+      <polygon points="6,4 12,8 6,12 0,8" fill={`url(#${id})`} transform="translate(6 10)" />
+    </svg>
+  );
+}
+
+export function ICloudIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  const id = uid('icloud');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#8B5A2B" />
+          <stop offset="100%" stopColor="#D4944A" />
+        </linearGradient>
+      </defs>
+      <path d="M7 18h11a4 4 0 0 0 .4-7.98 6 6 0 0 0-11.8 1.27A4 4 0 0 0 7 18z" fill={`url(#${id})`} fillOpacity="0.2" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
