@@ -1,0 +1,54 @@
+// =============================================================================
+// Arrowhead 7 — Style DNA analysis API
+// =============================================================================
+// POST { references: Array<{ url, platform?, weight? }>, options? }
+// -> { styleDNA: Omit<StyleDNA, 'id'|'created_at'|'updated_at'> }
+//
+// Runs in the Node.js runtime because the analyser shells out to FFmpeg.
+
+import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/supabase/server';
+import { analyzeReferenceVideos } from '@/lib/style-dna/analyzer';
+import { z } from 'zod';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
+
+const Body = z.object({
+  references: z.array(
+    z.object({
+      url: z.string().min(1),
+      platform: z.enum(['instagram', 'tiktok', 'youtube', 'x', 'other']).optional(),
+      weight: z.number().min(0).max(1).optional(),
+    })
+  ).min(1).max(5),
+  options: z.object({
+    maxAnalyzeSeconds: z.number().min(5).max(300).optional(),
+    sceneThreshold: z.number().min(0.05).max(0.95).optional(),
+  }).optional(),
+});
+
+export async function POST(request: NextRequest) {
+  try {
+    const user = await requireUser();
+    const json = await request.json();
+    const parsed = Body.safeParse(json);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 });
+    }
+    const { references, options } = parsed.data;
+
+    const dna = await analyzeReferenceVideos(references, user.id, options);
+    return NextResponse.json({ styleDNA: dna });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    console.error('[style-dna/analyze]', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Style DNA analysis failed' },
+      { status: 500 }
+    );
+  }
+}

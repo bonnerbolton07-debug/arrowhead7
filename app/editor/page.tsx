@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Logo, LogoIcon } from '@/components/ui/Logo';
 import { getClient } from '@/lib/supabase/client';
+import type { StyleDNA } from '@/types/edit';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -15,11 +16,14 @@ const STEPS: { id: Step; label: string }[] = [
 ];
 
 type UploadState = 'idle' | 'uploading' | 'done' | 'error';
-type AnalyzeState = 'idle' | 'analyzing' | 'done';
+type AnalyzeState = 'idle' | 'analyzing' | 'done' | 'error';
 type RenderState = 'idle' | 'submitting' | 'processing' | 'completed' | 'failed';
 
 type Resolution = 'sd' | 'hd' | '1080' | '4k';
 type Format = 'mp4' | 'webm';
+type Platform = 'tiktok' | 'reels' | 'shorts' | 'youtube' | 'square';
+
+type AnalyzedStyleDNA = Omit<StyleDNA, 'id' | 'created_at' | 'updated_at'>;
 
 const ALLOWED_MIME = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
 
@@ -45,12 +49,22 @@ export default function EditorPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [footageError, setFootageError] = useState<string | null>(null);
 
-  // Step 3 — Style analysis (placeholder)
+  // Step 3 — Style DNA analysis
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle');
+  const [styleDNA, setStyleDNA] = useState<AnalyzedStyleDNA | null>(null);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [analyzeStage, setAnalyzeStage] = useState<string>('');
 
   // Step 4 — Configure
   const [resolution, setResolution] = useState<Resolution>('1080');
   const [format, setFormat] = useState<Format>('mp4');
+  const [platform, setPlatform] = useState<Platform>('reels');
+  const [targetDuration, setTargetDuration] = useState<number>(30);
+  const [generateSoundtrack, setGenerateSoundtrack] = useState<boolean>(false);
+  const [hookText, setHookText] = useState<string>('');
+  const [ctaText, setCtaText] = useState<string>('');
+  const [matchState, setMatchState] = useState<'idle' | 'matching' | 'ready' | 'error'>('idle');
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   // Step 5 — Render
   const [renderState, setRenderState] = useState<RenderState>('idle');
@@ -153,13 +167,64 @@ export default function EditorPage() {
     }
   }, [referenceR2Key, referenceUrl]);
 
-  // ─── Step 3: Style DNA analysis (simulated for now) ────────────────────
+  // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
     if (step !== 'style' || analyzeState !== 'idle') return;
-    setAnalyzeState('analyzing');
-    const t = setTimeout(() => setAnalyzeState('done'), 2400);
-    return () => clearTimeout(t);
-  }, [step, analyzeState]);
+    const reference = referenceR2Key || referenceUrl.trim();
+    if (!reference) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setAnalyzeState('analyzing');
+      setAnalyzeError(null);
+      setAnalyzeStage('Resolving reference...');
+      // Animate stage labels so the user sees progress while the server works.
+      const stages = [
+        'Resolving reference...',
+        'Probing video metadata...',
+        'Detecting scene cuts...',
+        'Extracting audio waveform...',
+        'Estimating BPM and beats...',
+        'Sampling color palette...',
+        'Composing Style DNA...',
+      ];
+      let stageIdx = 0;
+      const stageTimer = setInterval(() => {
+        stageIdx = Math.min(stageIdx + 1, stages.length - 1);
+        if (!cancelled) setAnalyzeStage(stages[stageIdx]);
+      }, 1500);
+
+      try {
+        const res = await fetch('/api/style-dna/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            references: [{ url: reference }],
+          }),
+        });
+        clearInterval(stageTimer);
+        if (cancelled) return;
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `Analysis failed (${res.status})`);
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setStyleDNA(data.styleDNA as AnalyzedStyleDNA);
+        setAnalyzeStage('Style DNA captured');
+        setAnalyzeState('done');
+      } catch (err) {
+        clearInterval(stageTimer);
+        if (cancelled) return;
+        setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed');
+        setAnalyzeState('error');
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, analyzeState, referenceR2Key, referenceUrl]);
 
   // ─── Step 5: Render & poll ─────────────────────────────────────────────
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -205,9 +270,53 @@ export default function EditorPage() {
     }
   }, [stopPolling]);
 
+  const buildMatch = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!editId || !styleDNA) {
+      const msg = 'Style DNA missing — go back and run analysis';
+      setMatchError(msg);
+      return { ok: false, error: msg };
+    }
+    setMatchState('matching');
+    setMatchError(null);
+    try {
+      const res = await fetch('/api/style-dna/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          editId,
+          styleDNA,
+          options: {
+            targetDuration,
+            platform,
+            outputFormat: format,
+            outputResolution: resolution,
+            outputFps: 30,
+            hookText: hookText.trim() || undefined,
+            ctaText: ctaText.trim() || undefined,
+            generateSoundtrack,
+            referenceSoundtrackKey: generateSoundtrack && referenceR2Key ? referenceR2Key : undefined,
+          },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `Match failed (${res.status})`);
+      setMatchState('ready');
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Match failed';
+      setMatchError(msg);
+      setMatchState('error');
+      return { ok: false, error: msg };
+    }
+  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, referenceR2Key]);
+
   const startRender = useCallback(async () => {
     if (!editId || !footageR2Key) {
       setRenderError('Upload footage before rendering.');
+      return;
+    }
+    if (!styleDNA) {
+      setRenderError('Style DNA is missing — go back and analyze the reference.');
       return;
     }
     setRenderState('submitting');
@@ -215,25 +324,13 @@ export default function EditorPage() {
     setRenderProgress(0);
 
     try {
-      // Persist render config so the API route can pick it up.
-      const supabase = getClient();
-      const renderConfig = {
-        timeline: {
-          tracks: [
-            {
-              clips: [
-                {
-                  asset: { type: 'video', src: footageR2Key },
-                  start: 0,
-                  length: 10,
-                },
-              ],
-            },
-          ],
-        },
-        output: { format, resolution },
-      };
-      await supabase.from('edits').update({ render_config: renderConfig, status: 'ready' }).eq('id', editId);
+      // Build the render config from Style DNA + source footage.
+      const matched = await buildMatch();
+      if (!matched.ok) {
+        setRenderState('failed');
+        setRenderError(matched.error || 'Failed to compose render plan');
+        return;
+      }
 
       const res = await fetch('/api/shotstack/render', {
         method: 'POST',
@@ -250,7 +347,7 @@ export default function EditorPage() {
       setRenderState('failed');
       setRenderError(err instanceof Error ? err.message : 'Render failed');
     }
-  }, [editId, footageR2Key, format, resolution, pollStatus]);
+  }, [editId, footageR2Key, styleDNA, buildMatch, pollStatus]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -379,32 +476,60 @@ export default function EditorPage() {
         )}
 
         {step === 'style' && (
-          <div className="w-full max-w-xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Analyzing Style DNA</h2>
+          <div className="w-full max-w-2xl">
+            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">
+              {analyzeState === 'done' ? 'Style DNA Captured' : 'Analyzing Style DNA'}
+            </h2>
             <p className="text-a7-text/40 text-sm mb-8 text-center">
-              Extracting the editing fingerprint from your reference.
+              {analyzeState === 'done'
+                ? 'Editing fingerprint ready. Review or adjust below.'
+                : 'Extracting the editing fingerprint from your reference.'}
             </p>
 
-            <div className="mb-6 flex justify-center">
-              <Logo variant="teal" size="md" animate={analyzeState === 'analyzing'} />
-            </div>
+            {analyzeState !== 'done' && (
+              <>
+                <div className="mb-6 flex justify-center">
+                  <Logo variant="teal" size="md" animate={analyzeState === 'analyzing'} />
+                </div>
 
-            <div
-              className="w-full rounded-full h-2 mb-4 overflow-hidden"
-              style={{ background: 'linear-gradient(90deg, #1A1918, #10100E)' }}
-            >
-              <div
-                className="h-2 rounded-full transition-all"
-                style={{
-                  width: analyzeState === 'analyzing' ? '60%' : analyzeState === 'done' ? '100%' : '0%',
-                  background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-                  boxShadow: '0 0 15px rgba(45,212,191,0.4)',
-                }}
-              />
-            </div>
-            <p className="text-a7-text/30 text-xs text-center">
-              {analyzeState === 'done' ? 'Style DNA captured' : 'Reading cuts, color, pacing...'}
-            </p>
+                <div
+                  className="w-full rounded-full h-2 mb-4 overflow-hidden"
+                  style={{ background: 'linear-gradient(90deg, #1A1918, #10100E)' }}
+                >
+                  <div
+                    className="h-2 rounded-full transition-all shimmer"
+                    style={{
+                      width: analyzeState === 'analyzing' ? '70%' : analyzeState === 'error' ? '100%' : '0%',
+                      background: analyzeState === 'error'
+                        ? 'linear-gradient(135deg, #E8B06A, #B87333)'
+                        : 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                      boxShadow: '0 0 15px rgba(45,212,191,0.4)',
+                    }}
+                  />
+                </div>
+                <p className="text-a7-text/40 text-xs text-center">
+                  {analyzeState === 'error'
+                    ? `Analysis failed: ${analyzeError ?? 'unknown error'}`
+                    : analyzeStage || 'Working...'}
+                </p>
+
+                {analyzeState === 'error' && (
+                  <div className="mt-4 flex justify-center">
+                    <button
+                      onClick={() => setAnalyzeState('idle')}
+                      className="px-4 py-2 rounded-md text-sm font-medium text-a7-void"
+                      style={{ background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {analyzeState === 'done' && styleDNA && (
+              <StyleDNAPreview dna={styleDNA} />
+            )}
 
             <NavButtons onNext={next} onBack={back} disabled={!canAdvance} nextLabel="Continue" />
           </div>
@@ -414,8 +539,22 @@ export default function EditorPage() {
           <div className="w-full max-w-xl">
             <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Render Settings</h2>
             <p className="text-a7-text/40 text-sm mb-8 text-center">
-              Choose your output format and resolution.
+              Tune output and storytelling. Style DNA already shapes the cut.
             </p>
+
+            <FieldGroup label="Platform">
+              <Segmented
+                value={platform}
+                onChange={(v) => setPlatform(v as Platform)}
+                options={[
+                  { value: 'reels', label: 'Reels 9:16' },
+                  { value: 'tiktok', label: 'TikTok 9:16' },
+                  { value: 'shorts', label: 'Shorts 9:16' },
+                  { value: 'youtube', label: 'YouTube 16:9' },
+                  { value: 'square', label: 'Square 1:1' },
+                ]}
+              />
+            </FieldGroup>
 
             <FieldGroup label="Resolution">
               <Segmented
@@ -439,6 +578,57 @@ export default function EditorPage() {
                   { value: 'webm', label: 'WebM' },
                 ]}
               />
+            </FieldGroup>
+
+            <FieldGroup label={`Duration (${targetDuration}s)`}>
+              <input
+                type="range"
+                min={5}
+                max={120}
+                step={1}
+                value={targetDuration}
+                onChange={(e) => setTargetDuration(Number(e.target.value))}
+                className="w-full accent-grad-teal"
+              />
+            </FieldGroup>
+
+            <FieldGroup label="Hook text (optional)">
+              <input
+                type="text"
+                value={hookText}
+                onChange={(e) => setHookText(e.target.value)}
+                placeholder="3 seconds to stop the scroll..."
+                maxLength={80}
+                className="w-full px-4 py-2 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal"
+              />
+            </FieldGroup>
+
+            <FieldGroup label="CTA text (optional)">
+              <input
+                type="text"
+                value={ctaText}
+                onChange={(e) => setCtaText(e.target.value)}
+                placeholder="Follow for more"
+                maxLength={80}
+                className="w-full px-4 py-2 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal"
+              />
+            </FieldGroup>
+
+            <FieldGroup label="Soundtrack">
+              <label className="flex items-center gap-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={generateSoundtrack}
+                  onChange={(e) => setGenerateSoundtrack(e.target.checked)}
+                  className="w-4 h-4 accent-grad-teal"
+                />
+                <span className="text-sm text-a7-text/70">
+                  Generate an original soundtrack matching the reference vibe
+                </span>
+              </label>
+              <p className="mt-2 text-[11px] text-a7-text/30">
+                Routed through Mubert / SOUNDRAW when configured. Zero copyright risk.
+              </p>
             </FieldGroup>
 
             <NavButtons onNext={next} onBack={back} disabled={!canAdvance} nextLabel="Continue" />
@@ -801,6 +991,151 @@ function NavButtons({
       >
         {nextLabel}
       </button>
+    </div>
+  );
+}
+
+// ─── Style DNA preview ────────────────────────────────────────────────────
+
+function StyleDNAPreview({ dna }: { dna: AnalyzedStyleDNA }) {
+  const cut = dna.cut_pattern;
+  const arc = dna.energy_arc;
+  const color = dna.color_profile;
+  const audio = dna.audio_edit_relationship;
+  const palette = ((dna.raw_analysis as Record<string, unknown> | undefined)?.dominant_palette as string[] | undefined) ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Stat label="Cuts" value={String(cut.total_cuts)} sub={`${cut.cuts_per_minute.toFixed(1)} / min`} />
+        <Stat label="Avg cut" value={`${(cut.avg_cut_duration_ms / 1000).toFixed(2)}s`} sub={cut.cut_rhythm} />
+        <Stat label="BPM" value={dna.pacing.bpm_target ? Math.round(dna.pacing.bpm_target).toString() : '—'} sub={cut.beat_sync ? 'beat-synced' : 'free-time'} />
+        <Stat label="Energy" value={dna.pacing.overall_energy} sub={`${arc.shape} arc`} />
+      </div>
+
+      <div>
+        <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-2">Energy arc</div>
+        <Sparkline values={arc.curve} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-2">Cut vocabulary</div>
+          <div className="flex flex-wrap gap-1.5">
+            {cut.cut_types.slice(0, 5).map((c) => (
+              <span
+                key={c.type}
+                className="px-2 py-1 rounded text-[11px] text-a7-text/80"
+                style={{ background: 'rgba(45,212,191,0.07)', border: '1px solid rgba(45,212,191,0.15)' }}
+              >
+                {c.type} <span className="text-a7-text/40">{Math.round(c.weight * 100)}%</span>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-2">Color profile</div>
+          <div className="flex flex-col gap-1 text-[11px] text-a7-text/60">
+            <span>temperature: {color.temperature}</span>
+            <span>saturation: {color.saturation}</span>
+            <span>contrast: {color.contrast}</span>
+            <span>brightness: {color.brightness}</span>
+          </div>
+        </div>
+      </div>
+
+      {palette.length > 0 && (
+        <div>
+          <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-2">Palette</div>
+          <div className="flex gap-1.5">
+            {palette.slice(0, 6).map((hex, i) => (
+              <div
+                key={i}
+                className="w-8 h-8 rounded"
+                style={{ background: hex, border: '1px solid rgba(245,240,232,0.06)' }}
+                title={hex}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-2 text-[11px] text-a7-text/60">
+        <Flag on={audio.cuts_on_beats}>cuts on beats</Flag>
+        <Flag on={audio.cuts_on_vocals}>cuts on vocals</Flag>
+        <Flag on={cut.has_breathing_moments}>breathing</Flag>
+        <Flag on={arc.has_cold_open}>cold open</Flag>
+        <Flag on={dna.pacing.builds_tension}>builds tension</Flag>
+        <Flag on={dna.pacing.has_drops}>drops</Flag>
+      </div>
+
+      <p className="text-[11px] text-a7-text/30 text-center">
+        Confidence {(dna.confidence_score * 100).toFixed(0)}%
+      </p>
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div
+      className="rounded-md px-3 py-2"
+      style={{
+        background: 'linear-gradient(135deg, rgba(45,212,191,0.04), rgba(45,212,191,0.01))',
+        border: '1px solid rgba(45,212,191,0.08)',
+      }}
+    >
+      <div className="text-[10px] uppercase tracking-wider text-a7-text/40">{label}</div>
+      <div className="text-base font-semibold text-a7-text">{value}</div>
+      {sub && <div className="text-[11px] text-a7-text/40 capitalize">{sub}</div>}
+    </div>
+  );
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length === 0) return null;
+  const w = 320;
+  const h = 48;
+  const maxV = Math.max(...values, 0.001);
+  const points = values
+    .map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / maxV) * h}`)
+    .join(' ');
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      preserveAspectRatio="none"
+      className="w-full h-12 rounded-md"
+      style={{
+        background: 'linear-gradient(180deg, #10100E, #0C0C0A)',
+        border: '1px solid rgba(45,212,191,0.08)',
+      }}
+    >
+      <defs>
+        <linearGradient id="spark-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#2DD4BF" stopOpacity="0.6" />
+          <stop offset="100%" stopColor="#2DD4BF" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polyline points={points} fill="none" stroke="#2DD4BF" strokeWidth="1.5" />
+      <polygon
+        points={`0,${h} ${points} ${w},${h}`}
+        fill="url(#spark-grad)"
+      />
+    </svg>
+  );
+}
+
+function Flag({ on, children }: { on: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className="px-2 py-1 rounded text-center"
+      style={{
+        background: on ? 'rgba(45,212,191,0.07)' : 'rgba(245,240,232,0.02)',
+        border: `1px solid ${on ? 'rgba(45,212,191,0.2)' : 'rgba(245,240,232,0.04)'}`,
+        color: on ? 'rgba(245,240,232,0.85)' : 'rgba(245,240,232,0.25)',
+      }}
+    >
+      {children}
     </div>
   );
 }

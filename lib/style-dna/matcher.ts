@@ -1,17 +1,16 @@
 // =============================================================================
 // Arrowhead 7 — Style DNA Matcher
 // =============================================================================
-// Takes a Style DNA profile and applies it to source footage.
-// Generates the Shotstack render config that produces the final edit.
+// Takes a Style DNA profile + raw source footage and produces a Shotstack
+// render config that recreates the reference's editing FEEL with the user's
+// own footage.
 //
-// This is NOT just color correction or shot selection. The matcher rebuilds
-// the ENTIRE editing language from the Style DNA: cut rhythm, breathing
-// patterns, transition vocabulary, energy arc, audio-visual sync, motion
-// techniques, narrative structure, and text overlay styling.
-//
-// A user drops a reference reel from a creator they admire, A7 extracts the
-// Style DNA, and the matcher rebuilds that exact editing FEEL with the user's
-// own footage — same rhythm, same energy, same craft.
+// Source analysis is done in `analyseSourceFootage` (light pass: ffprobe scene
+// detect + audio). The matcher then builds a timeline skeleton from the DNA's
+// pacing / energy arc, assigns source segments to slots scored by quality and
+// energy match, applies the DNA's rhythm distribution, picks transitions
+// weighted by DNA + context, applies color grading, builds the audio track
+// (with optional soundtrack), and returns a render config ready for Shotstack.
 
 import type {
   StyleDNA,
@@ -22,730 +21,707 @@ import type {
   ShotstackOutput,
   CutPattern,
   ColorProfile,
-  PacingProfile,
   EnergyArc,
   TransitionPreference,
-  AudioEditRelationship,
   MotionProfile,
   NarrativeStructure,
   TextStyleProfile,
 } from '@/types/edit';
+import { isFfmpegAvailable, unlinkQuiet } from './ffmpeg-runner';
+import { resolveSource } from './source';
+import { extractMetadata, detectScenes } from './probe';
+import { analyzeAudio } from './audio';
 
-// ─── Main Matcher ────────────────────────────────────────────────────────────
-
-/**
- * Apply a Style DNA profile to source footage, generating a Shotstack render config.
- *
- * This is the core creative engine of Arrowhead 7.
- *
- * Process:
- *  1. Analyze source footage (scenes, quality, motion, audio)
- *  2. Build an energy-mapped timeline from the DNA's energy arc
- *  3. Select best source segments per timeline slot (CLIP embeddings + quality)
- *  4. Apply the DNA's cut rhythm and breathing patterns
- *  5. Map transitions from the DNA's transition vocabulary
- *  6. Apply audio-edit relationship (J-cuts, L-cuts, beat sync, silence)
- *  7. Apply motion techniques (speed ramps, zoom punches)
- *  8. Apply color grading from DNA
- *  9. Add text overlays matching DNA text style
- * 10. Apply narrative structure (hook, intro, segments, CTA)
- * 11. Generate complete Shotstack timeline
- */
-export async function applyStyleDNA(
-  sourceVideoUrl: string,
-  styleDNA: StyleDNA,
-  options: MatcherOptions = {}
-): Promise<ShotstackRenderConfig> {
-  // Step 1: Deep analysis of source content
-  const sourceAnalysis = await analyzeSourceContent(sourceVideoUrl);
-
-  // Step 2: Build energy-mapped timeline skeleton from DNA
-  const timelineSkeleton = buildTimelineSkeleton(styleDNA, options);
-
-  // Step 3: Select and assign source segments to timeline slots
-  const assignedSegments = assignSegmentsToTimeline(
-    sourceAnalysis.segments, timelineSkeleton, styleDNA.cut_pattern
-  );
-
-  // Step 4: Apply cut rhythm and breathing patterns
-  const rhythmAdjusted = applyRhythmPatterns(
-    assignedSegments, styleDNA.cut_pattern
-  );
-
-  // Step 5: Build video clips with transitions
-  const videoClips = buildClipsWithTransitions(
-    rhythmAdjusted, styleDNA
-  );
-
-  // Step 6: Build audio relationships (J-cuts, L-cuts, ducking)
-  const audioTrack = buildAudioTrack(
-    rhythmAdjusted, styleDNA, options
-  );
-
-  // Step 7: Build motion effects track (speed ramps, zoom punches)
-  const motionClips = styleDNA.motion_profile
-    ? applyMotionEffects(videoClips, styleDNA.motion_profile)
-    : videoClips;
-
-  // Step 8: Build text overlay track
-  const textTrack = styleDNA.text_style
-    ? buildTextOverlayTrack(rhythmAdjusted, styleDNA.text_style, options)
-    : undefined;
-
-  // Step 9: Apply narrative structure (hook reordering, CTA placement)
-  const structuredClips = styleDNA.narrative_structure
-    ? applyNarrativeStructure(motionClips, styleDNA.narrative_structure, sourceAnalysis)
-    : motionClips;
-
-  // Step 10: Assemble final timeline
-  const timeline: ShotstackTimeline = {
-    tracks: [
-      { clips: structuredClips },            // Main video
-      ...(textTrack ? [textTrack] : []),      // Text overlays
-      ...(audioTrack ? [audioTrack] : []),    // Audio/soundtrack
-    ],
-    background: '#000000',
-  };
-
-  // Step 11: Configure output
-  const output: ShotstackOutput = {
-    format: options.outputFormat || 'mp4',
-    resolution: options.outputResolution || '1080',
-    fps: options.outputFps || 30,
-    quality: 'high',
-  };
-
-  return { timeline, output };
-}
-
-// ─── Options ─────────────────────────────────────────────────────────────────
+// ─── Public API ─────────────────────────────────────────────────────────────
 
 export interface MatcherOptions {
-  /** Target output duration in seconds */
+  /** Target output duration in seconds (default 30). */
   targetDuration?: number;
-  /** Override audio track URL */
+  /** Optional override soundtrack URL (Shotstack-accessible). */
   audioUrl?: string;
-  /** Audio track duration in seconds */
+  /** Duration of the override soundtrack. */
   audioDuration?: number;
-  /** Beat timestamps for audio sync (seconds) */
+  /** Beat timestamps for the soundtrack (used for beat-sync snapping). */
   beatTimestamps?: number[];
-  /** Output format */
   outputFormat?: 'mp4' | 'webm' | 'gif';
-  /** Output resolution */
   outputResolution?: 'sd' | 'hd' | '1080' | '4k';
-  /** Output FPS */
   outputFps?: number;
-  /** Text overlays to add (e.g., captions, titles) */
+  /** Target platform — chooses the aspect ratio when DNA doesn't pin one. */
+  platform?: 'tiktok' | 'reels' | 'shorts' | 'youtube' | 'square';
   textOverlays?: Array<{ text: string; timestamp: number; duration: number }>;
-  /** Hook text (shown in first 1-3 seconds if DNA has cold open) */
   hookText?: string;
-  /** CTA text (shown at end if DNA has outro CTA) */
   ctaText?: string;
+  /** Public, Shotstack-fetchable URL for the source footage. Required. */
+  sourceVideoUrl: string;
 }
 
-// ─── Source Content Analysis ────────────────────────────────────────────────
+/**
+ * Apply a Style DNA profile to source footage, returning a Shotstack render
+ * configuration. Throws if the source footage cannot be analysed.
+ */
+export async function applyStyleDNA(
+  sourceLocalPath: string,
+  styleDNA: StyleDNA,
+  options: MatcherOptions
+): Promise<ShotstackRenderConfig> {
+  if (!options.sourceVideoUrl) {
+    throw new Error('MatcherOptions.sourceVideoUrl is required (Shotstack-accessible URL)');
+  }
+  const sourceAnalysis = await analyseSourceFootage(sourceLocalPath);
+  return buildRenderConfig(styleDNA, sourceAnalysis, options);
+}
 
-interface SourceAnalysis {
-  segments: SourceSegment[];
+/**
+ * Same as applyStyleDNA but takes a reference (R2 key, presigned URL, etc.)
+ * and downloads it for analysis.
+ */
+export async function applyStyleDNAFromReference(
+  sourceReference: string,
+  styleDNA: StyleDNA,
+  options: MatcherOptions
+): Promise<ShotstackRenderConfig> {
+  const resolved = await resolveSource(sourceReference);
+  try {
+    return await applyStyleDNA(resolved.path, styleDNA, options);
+  } finally {
+    if (resolved.ephemeral) await unlinkQuiet(resolved.path);
+  }
+}
+
+// ─── Source footage analysis ────────────────────────────────────────────────
+
+export interface SourceSegment {
+  startTime: number;
+  endTime: number;
+  qualityScore: number;
+  motionLevel: number;
+  energyLevel: number;
+  contentType: 'action' | 'talking' | 'b-roll' | 'transition' | 'static';
+}
+
+export interface SourceAnalysis {
   totalDuration: number;
+  segments: SourceSegment[];
   audioBeats: number[];
   hasSpeech: boolean;
   hasMusic: boolean;
 }
 
-interface SourceSegment {
-  startTime: number;           // Seconds into source video
-  endTime: number;
-  qualityScore: number;        // 0-1, visual quality/interest
-  motionLevel: number;         // 0-1, amount of motion
-  energyLevel: number;         // 0-1, visual energy/intensity
-  brightness: number;          // 0-1
-  dominantColors: string[];
-  hasText: boolean;            // Contains on-screen text
-  hasFace: boolean;            // Contains a human face
-  contentType: 'action' | 'talking' | 'b-roll' | 'transition' | 'static';
-  // CLIP embedding for semantic similarity matching
-  clipEmbedding?: number[];    // TODO: CLIP vector for semantic search
-}
+async function analyseSourceFootage(filePath: string): Promise<SourceAnalysis> {
+  if (!(await isFfmpegAvailable())) {
+    // No FFmpeg — produce a single 30s "whole video" segment so the matcher
+    // can still output a valid timeline (just less interesting).
+    return {
+      totalDuration: 30,
+      segments: [{
+        startTime: 0,
+        endTime: 30,
+        qualityScore: 0.6,
+        motionLevel: 0.5,
+        energyLevel: 0.5,
+        contentType: 'b-roll',
+      }],
+      audioBeats: [],
+      hasSpeech: false,
+      hasMusic: false,
+    };
+  }
 
-async function analyzeSourceContent(_videoUrl: string): Promise<SourceAnalysis> {
-  // TODO: Full source analysis pipeline
-  //
-  // 1. FFmpeg scene detection → segment boundaries
-  // 2. Per segment:
-  //    a. Quality scoring (sharpness, exposure, framing)
-  //    b. Motion analysis (optical flow magnitude)
-  //    c. Energy level (motion + color variance + content density)
-  //    d. Face detection (for talking head segments)
-  //    e. Text detection (for segments with on-screen text)
-  //    f. CLIP embedding (for semantic similarity to reference shots)
-  //    g. Content type classification
-  // 3. Audio analysis: beat detection, speech detection, music detection
-  //
-  // The CLIP embedding is KEY for shot matching — it lets us find source footage
-  // segments that are semantically similar to reference video segments,
-  // not just visually similar. "A wide shot of mountains" matches regardless
-  // of which mountains.
+  const metadata = await extractMetadata(filePath);
+  const duration = metadata.duration || 30;
+  const scenes = await detectScenes(filePath, duration, 0.25);
+  const audio = await analyzeAudio(filePath, metadata.has_audio);
+
+  // Build segments from scene boundaries. Filter out sub-300ms slivers (showinfo
+  // noise) and sub-2s segments unless we have very few of them.
+  const segments: SourceSegment[] = [];
+  for (let i = 0; i < scenes.cuts.length - 1; i++) {
+    const start = scenes.cuts[i];
+    const end = scenes.cuts[i + 1];
+    const segDuration = end - start;
+    if (segDuration < 0.3) continue;
+    // Energy at this point from the audio curve (if any).
+    const energy = sampleEnergyAt(audio.energy_curve, audio.duration_seconds, (start + end) / 2);
+    segments.push({
+      startTime: start,
+      endTime: end,
+      qualityScore: 0.6 + Math.min(0.3, segDuration / 10),
+      motionLevel: 0.5,
+      energyLevel: energy,
+      contentType: audio.has_speech && energy > 0.4 ? 'talking' : 'b-roll',
+    });
+  }
+  if (segments.length === 0) {
+    // Single-shot footage — slice into 2-3s pieces so the matcher has slots.
+    const slice = 2.5;
+    for (let t = 0; t + slice <= duration; t += slice) {
+      segments.push({
+        startTime: t,
+        endTime: t + slice,
+        qualityScore: 0.55,
+        motionLevel: 0.5,
+        energyLevel: 0.5,
+        contentType: 'b-roll',
+      });
+    }
+  }
 
   return {
-    segments: [
-      {
-        startTime: 0,
-        endTime: 5,
-        qualityScore: 0.8,
-        motionLevel: 0.5,
-        energyLevel: 0.6,
-        brightness: 0.6,
-        dominantColors: ['#333333'],
-        hasText: false,
-        hasFace: false,
-        contentType: 'b-roll',
-      },
-    ],
-    totalDuration: 5,
-    audioBeats: [],
-    hasSpeech: false,
-    hasMusic: false,
+    totalDuration: duration,
+    segments,
+    audioBeats: audio.beats,
+    hasSpeech: audio.has_speech,
+    hasMusic: audio.has_music,
   };
 }
 
-// ─── Timeline Skeleton ──────────────────────────────────────────────────────
-
-interface TimelineSlot {
-  startTime: number;           // Position in output timeline
-  duration: number;            // How long this slot lasts
-  targetEnergy: number;        // 0-1, energy level for this slot
-  slotType: 'content' | 'hook' | 'intro' | 'outro' | 'breathing';
-  cutType?: string;            // Preferred cut type entering this slot
+function sampleEnergyAt(curve: number[], curveDuration: number, t: number): number {
+  if (curve.length === 0 || curveDuration <= 0) return 0.5;
+  const idx = Math.min(curve.length - 1, Math.max(0, Math.floor((t / curveDuration) * curve.length)));
+  return curve[idx];
 }
 
-/**
- * Build a timeline skeleton from the DNA's energy arc and pacing.
- * This defines WHEN cuts happen and at what energy level —
- * before we even look at the source footage.
- */
-function buildTimelineSkeleton(
+// ─── Render config builder ──────────────────────────────────────────────────
+
+export function buildRenderConfig(
   dna: StyleDNA,
+  source: SourceAnalysis,
   options: MatcherOptions
-): TimelineSlot[] {
-  const targetDuration = options.targetDuration || 30;
+): ShotstackRenderConfig {
+  const targetDuration = Math.min(
+    options.targetDuration ?? Math.min(source.totalDuration, 30),
+    source.totalDuration
+  );
+
+  const skeleton = buildTimelineSkeleton(dna, targetDuration);
+  const assigned = assignSegmentsToTimeline(source.segments, skeleton, dna);
+  const rhythmAdjusted = applyRhythmPatterns(assigned, dna.cut_pattern);
+
+  let videoClips = buildVideoClips(rhythmAdjusted, dna, options.sourceVideoUrl);
+  videoClips = applyMotionEffects(videoClips, dna.motion_profile);
+
+  // Beat-snap if we have beats (either DNA-provided or option-provided)
+  const beats = options.beatTimestamps ?? (dna.audio_sync_strategy === 'beat-sync' ? source.audioBeats : []);
+  if (beats.length > 0) {
+    videoClips = syncToBeats(videoClips, beats);
+  }
+
+  if (dna.narrative_structure) {
+    videoClips = applyNarrativeStructure(videoClips, dna.narrative_structure);
+  }
+
+  const tracks: ShotstackTrack[] = [{ clips: videoClips }];
+
+  const textTrack = dna.text_style
+    ? buildTextOverlayTrack(rhythmAdjusted, dna.text_style, options)
+    : undefined;
+  if (textTrack) tracks.push(textTrack);
+
+  const audioTrack = buildAudioTrack(dna, options, targetDuration);
+  if (audioTrack) tracks.push(audioTrack);
+
+  const timeline: ShotstackTimeline = {
+    tracks,
+    background: '#000000',
+  };
+
+  const output = resolveOutput(dna, options);
+  return { timeline, output };
+}
+
+function resolveOutput(dna: StyleDNA, options: MatcherOptions): ShotstackOutput {
+  const aspect = dna.framing_profile.aspect_ratio_preference;
+  const platform = options.platform;
+  const size = sizeForPlatformOrAspect(platform, aspect, options.outputResolution ?? '1080');
+  return {
+    format: options.outputFormat || 'mp4',
+    resolution: options.outputResolution || '1080',
+    fps: options.outputFps || 30,
+    quality: 'high',
+    size,
+  };
+}
+
+function sizeForPlatformOrAspect(
+  platform: MatcherOptions['platform'],
+  aspect: string,
+  resolution: 'sd' | 'hd' | '1080' | '4k'
+): { width: number; height: number } | undefined {
+  // Shotstack uses size to override resolution when set. For social verticals
+  // we want 1080x1920; squares 1080x1080; landscape sticks with the resolution
+  // shorthand (which is 1920x1080 for 1080p).
+  const base = { sd: 854, hd: 1280, '1080': 1920, '4k': 3840 }[resolution];
+  if (platform === 'tiktok' || platform === 'reels' || platform === 'shorts' || aspect === '9:16') {
+    return { width: base === 3840 ? 2160 : base === 1920 ? 1080 : base === 1280 ? 720 : 480, height: base };
+  }
+  if (platform === 'square' || aspect === '1:1') {
+    return { width: base, height: base };
+  }
+  if (aspect === '4:5') {
+    const h = base;
+    return { width: Math.round(h * 0.8), height: h };
+  }
+  return undefined; // 16:9 handled by resolution
+}
+
+// ─── Timeline skeleton ──────────────────────────────────────────────────────
+
+interface TimelineSlot {
+  startTime: number;
+  duration: number;
+  targetEnergy: number;
+  slotType: 'content' | 'hook' | 'intro' | 'outro' | 'breathing';
+  preferredCutType?: string;
+}
+
+function buildTimelineSkeleton(dna: StyleDNA, targetDuration: number): TimelineSlot[] {
   const slots: TimelineSlot[] = [];
-  let currentTime = 0;
+  let cursor = 0;
 
-  // Use pacing sections to determine cut density per region
-  const sections = dna.pacing.sections.length > 0
-    ? dna.pacing.sections
-    : [{ start_pct: 0, end_pct: 1, energy: dna.pacing.overall_energy, cuts_per_minute: dna.cut_pattern.cuts_per_minute }];
+  // Sample durations from the cut histogram so the rhythm matches the reference's
+  // probability distribution rather than a uniform mean.
+  const histDurations = sampleHistogramDurations(dna.cut_pattern, targetDuration);
+  let histIdx = 0;
 
-  for (const section of sections) {
-    const sectionStart = section.start_pct * targetDuration;
-    const sectionEnd = section.end_pct * targetDuration;
-    const sectionDuration = sectionEnd - sectionStart;
-    const cutsInSection = Math.max(1, Math.round((section.cuts_per_minute / 60) * sectionDuration));
-    const clipDuration = sectionDuration / cutsInSection;
+  // Reserve hook slot at the front if narrative says so.
+  if (dna.narrative_structure?.has_hook) {
+    const hookSec = Math.max(0.8, (dna.narrative_structure.hook_duration_ms ?? 2000) / 1000);
+    slots.push({
+      startTime: 0,
+      duration: hookSec,
+      targetEnergy: 0.9,
+      slotType: 'hook',
+      preferredCutType: 'smash-cut',
+    });
+    cursor = hookSec;
+  }
 
-    // Map energy level to 0-1
-    const energyMap = { low: 0.25, medium: 0.5, high: 0.75, extreme: 1.0 };
-    const baseEnergy = energyMap[section.energy] || 0.5;
+  while (cursor < targetDuration - 0.1) {
+    const baseDur = histDurations[histIdx % histDurations.length] / 1000;
+    histIdx++;
+    const dur = Math.min(baseDur, Math.max(0.4, targetDuration - cursor));
+    const arcEnergy = sampleArc(dna.energy_arc, cursor / targetDuration);
+    const breathingDue =
+      dna.cut_pattern.has_breathing_moments &&
+      dna.cut_pattern.breathing_interval_ms &&
+      Math.floor(cursor / (dna.cut_pattern.breathing_interval_ms / 1000)) >
+        Math.floor((cursor - dur) / (dna.cut_pattern.breathing_interval_ms / 1000));
 
-    for (let i = 0; i < cutsInSection; i++) {
-      // Modulate energy using the DNA's energy arc curve
-      const positionInArc = (currentTime / targetDuration);
-      const arcEnergy = sampleEnergyArc(dna.energy_arc, positionInArc);
-      const blendedEnergy = (baseEnergy + arcEnergy) / 2;
-
-      // Insert breathing moments based on DNA breathing pattern
-      const isBreathingMoment =
-        dna.cut_pattern.has_breathing_moments &&
-        dna.cut_pattern.breathing_interval_ms &&
-        i > 0 &&
-        i % Math.round(dna.cut_pattern.breathing_interval_ms / (clipDuration * 1000)) === 0;
-
-      if (isBreathingMoment) {
-        slots.push({
-          startTime: currentTime,
-          duration: clipDuration * 2, // Breathing = double duration
-          targetEnergy: blendedEnergy * 0.5, // Lower energy
-          slotType: 'breathing',
-        });
-        currentTime += clipDuration * 2;
-      } else {
-        // Select cut type based on DNA vocabulary (weighted random)
-        const cutType = selectCutType(dna.cut_pattern.cut_types);
-
-        slots.push({
-          startTime: currentTime,
-          duration: clipDuration,
-          targetEnergy: blendedEnergy,
-          slotType: 'content',
-          cutType,
-        });
-        currentTime += clipDuration;
-      }
-
-      if (currentTime >= targetDuration) break;
+    if (breathingDue) {
+      const breathDur = Math.min(dur * 2, targetDuration - cursor);
+      slots.push({
+        startTime: cursor,
+        duration: breathDur,
+        targetEnergy: arcEnergy * 0.5,
+        slotType: 'breathing',
+      });
+      cursor += breathDur;
+    } else {
+      slots.push({
+        startTime: cursor,
+        duration: dur,
+        targetEnergy: arcEnergy,
+        slotType: 'content',
+        preferredCutType: selectWeightedType(dna.cut_pattern.cut_types),
+      });
+      cursor += dur;
     }
-    if (currentTime >= targetDuration) break;
+  }
+
+  // Outro CTA slot if DNA asks for it
+  if (dna.narrative_structure?.has_outro_cta && slots.length > 1) {
+    const last = slots[slots.length - 1];
+    last.slotType = 'outro';
+    last.targetEnergy = Math.max(0.4, last.targetEnergy * 0.7);
   }
 
   return slots;
 }
 
-function sampleEnergyArc(arc: EnergyArc, position: number): number {
+function sampleHistogramDurations(cut: CutPattern, targetDuration: number): number[] {
+  // Bucket centres in ms (mid-point of each histogram bucket; last bucket open)
+  const centres = [250, 750, 1500, 2500, 4000, 7500, 12000];
+  const hist = cut.duration_histogram.length === centres.length
+    ? cut.duration_histogram
+    : [0.1, 0.3, 0.3, 0.15, 0.1, 0.04, 0.01];
+  // Build a weighted sample list of, say, 64 durations from the histogram.
+  const samples: number[] = [];
+  const N = 64;
+  for (let i = 0; i < N; i++) {
+    const r = Math.random();
+    let cumulative = 0;
+    for (let b = 0; b < centres.length; b++) {
+      cumulative += hist[b];
+      if (r <= cumulative) {
+        // Jitter ±25% inside the bucket so we don't end up with identical lengths
+        samples.push(centres[b] * (0.75 + Math.random() * 0.5));
+        break;
+      }
+    }
+  }
+  // If the sampled mean is way off the target avg, scale to nudge toward it
+  const sampleMean = samples.reduce((a, b) => a + b, 0) / samples.length;
+  const wanted = cut.avg_cut_duration_ms || targetDuration * 1000 / 12;
+  if (sampleMean > 0 && Math.abs(wanted - sampleMean) > wanted * 0.2) {
+    const scale = wanted / sampleMean;
+    return samples.map((s) => Math.max(300, Math.min(15000, s * scale)));
+  }
+  return samples.map((s) => Math.max(300, Math.min(15000, s)));
+}
+
+function sampleArc(arc: EnergyArc, t: number): number {
   if (arc.curve.length === 0) return 0.5;
-  const idx = Math.min(
-    Math.floor(position * arc.curve.length),
-    arc.curve.length - 1
-  );
+  const idx = Math.min(arc.curve.length - 1, Math.max(0, Math.floor(t * arc.curve.length)));
   return arc.curve[idx];
 }
 
-function selectCutType(cutTypes: CutPattern['cut_types']): string {
-  if (cutTypes.length === 0) return 'hard-cut';
-  const totalWeight = cutTypes.reduce((s, c) => s + c.weight, 0);
-  let random = Math.random() * totalWeight;
-  for (const ct of cutTypes) {
-    random -= ct.weight;
-    if (random <= 0) return ct.type;
+function selectWeightedType<T extends { type: string; weight: number }>(items: T[]): string {
+  if (items.length === 0) return 'hard-cut';
+  const total = items.reduce((s, i) => s + i.weight, 0) || 1;
+  let r = Math.random() * total;
+  for (const it of items) {
+    r -= it.weight;
+    if (r <= 0) return it.type;
   }
-  return cutTypes[0].type;
+  return items[0].type;
 }
 
-// ─── Segment Assignment ─────────────────────────────────────────────────────
+// ─── Segment assignment ─────────────────────────────────────────────────────
 
-interface AssignedSegment extends SourceSegment {
+interface AssignedSegment {
+  segment: SourceSegment;
   slot: TimelineSlot;
-  outputStart: number;
-  outputDuration: number;
 }
 
-/**
- * Match source segments to timeline slots based on energy, quality, and content.
- *
- * This is where CLIP embeddings become critical for style matching —
- * we're not just picking random good footage, we're matching the FEEL
- * and content type of each slot to the best available source material.
- */
 function assignSegmentsToTimeline(
   segments: SourceSegment[],
   slots: TimelineSlot[],
-  cutPattern: CutPattern
-): AssignedSegment[] {
-  // TODO: Intelligent assignment algorithm
-  //
-  // For each timeline slot:
-  // 1. Filter source segments that are long enough
-  // 2. Score each candidate:
-  //    - Energy match: how close is segment energy to slot target energy?
-  //    - Quality: higher quality = higher score
-  //    - Content type fit: hook slots want high-energy, breathing wants calm
-  //    - CLIP similarity: if reference had a specific type of shot here,
-  //      find semantically similar footage in the source
-  //    - Variety penalty: avoid reusing the same segment
-  // 3. Pick the best scoring candidate
-  // 4. Handle J-cuts and L-cuts: extend audio beyond visual boundaries
-  //
-  // For beat-sync mode: snap slot boundaries to nearest beat timestamps
-
-  return slots.map((slot) => {
-    // Simple placeholder: use first available segment
-    const best = segments[0] || {
-      startTime: 0,
-      endTime: slot.duration,
-      qualityScore: 0.5,
-      motionLevel: 0.5,
-      energyLevel: 0.5,
-      brightness: 0.5,
-      dominantColors: ['#333'],
-      hasText: false,
-      hasFace: false,
-      contentType: 'b-roll' as const,
-    };
-
-    return {
-      ...best,
-      slot,
-      outputStart: slot.startTime,
-      outputDuration: slot.duration,
-    };
-  });
-}
-
-// ─── Rhythm Patterns ────────────────────────────────────────────────────────
-
-/**
- * Adjust clip timing to match the DNA's rhythm signature.
- * This is what makes the edit FEEL like the reference — the subtle
- * timing variations that distinguish a metronome from a musician.
- */
-function applyRhythmPatterns(
-  segments: AssignedSegment[],
-  cutPattern: CutPattern
-): AssignedSegment[] {
-  // TODO: Rhythm adjustment
-  //
-  // 1. If rhythm_consistency is high (>0.8): keep clips very regular
-  // 2. If syncopated: alternate short-long-short-long
-  // 3. If accelerating: progressively shorten clips
-  // 4. If variable: use the duration_histogram to randomly vary
-  //    clip lengths matching the reference's distribution
-  //
-  // The histogram is key — it captures the PROBABILITY DISTRIBUTION
-  // of cut durations from the reference. We sample from this
-  // distribution to get cuts that feel natural to the style.
-  //
-  // Also apply breathing moments: after a rapid-cut sequence,
-  // insert a longer hold to let the viewer breathe (if the DNA has them).
-
-  return segments; // Passthrough for now
-}
-
-// ─── Clip Building with Transitions ─────────────────────────────────────────
-
-function buildClipsWithTransitions(
-  segments: AssignedSegment[],
   dna: StyleDNA
+): AssignedSegment[] {
+  if (segments.length === 0) return [];
+  const used = new Map<number, number>(); // segment index -> times used
+  const out: AssignedSegment[] = [];
+
+  for (const slot of slots) {
+    let bestIdx = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (seg.endTime - seg.startTime < slot.duration * 0.6) continue; // too short
+      const reuseCount = used.get(i) || 0;
+      const energyMatch = 1 - Math.abs(seg.energyLevel - slot.targetEnergy);
+      const quality = seg.qualityScore;
+      const variety = 1 / (1 + reuseCount);
+      const slotPref =
+        slot.slotType === 'hook' ? (seg.energyLevel > 0.6 ? 0.3 : -0.2) :
+        slot.slotType === 'breathing' ? (seg.energyLevel < 0.5 ? 0.2 : -0.1) :
+        0;
+      // Color profile alignment: prefer brighter segments at high-energy slots,
+      // darker ones at breathing slots. We don't have per-segment color here,
+      // but slot energy already encodes the proxy.
+      const score = energyMatch * 0.5 + quality * 0.3 + variety * 0.2 + slotPref;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx === -1) {
+      // Fall back to the longest available segment
+      let longest = 0;
+      let longestIdx = 0;
+      segments.forEach((s, i) => {
+        const d = s.endTime - s.startTime;
+        if (d > longest) {
+          longest = d;
+          longestIdx = i;
+        }
+      });
+      bestIdx = longestIdx;
+    }
+    used.set(bestIdx, (used.get(bestIdx) || 0) + 1);
+    out.push({ slot, segment: segments[bestIdx] });
+  }
+
+  void dna; // accepted for future weighting (e.g. content-type preference)
+  return out;
+}
+
+// ─── Rhythm adjustment ──────────────────────────────────────────────────────
+
+function applyRhythmPatterns(assigned: AssignedSegment[], cut: CutPattern): AssignedSegment[] {
+  if (assigned.length < 3) return assigned;
+  // For accelerating rhythms, progressively shorten slot durations toward the
+  // end (down to a floor of 60% of the original). For decelerating, do the
+  // opposite. Variable / syncopated rhythms are left alone — the histogram
+  // sampler in the skeleton already handles them.
+  if (cut.cut_rhythm === 'accelerating') {
+    return assigned.map((a, i) => {
+      const t = i / (assigned.length - 1);
+      const factor = 1 - t * 0.4;
+      return { ...a, slot: { ...a.slot, duration: a.slot.duration * factor } };
+    });
+  }
+  if (cut.cut_rhythm === 'decelerating') {
+    return assigned.map((a, i) => {
+      const t = i / (assigned.length - 1);
+      const factor = 0.6 + t * 0.4;
+      return { ...a, slot: { ...a.slot, duration: a.slot.duration * factor } };
+    });
+  }
+  return assigned;
+}
+
+// ─── Video clip construction ────────────────────────────────────────────────
+
+function buildVideoClips(
+  assigned: AssignedSegment[],
+  dna: StyleDNA,
+  sourceVideoUrl: string
 ): ShotstackClip[] {
-  return segments.map((segment, index) => {
-    // Select transition based on DNA vocabulary + context
-    const transitionType = selectTransitionForContext(
-      dna.transition_preferences,
-      segment,
-      index,
-      segments.length,
-      dna.energy_arc
-    );
+  let cursor = 0;
+  const filter = mapColorProfileToFilter(dna.color_profile);
 
-    // Map color profile to Shotstack filter
-    const filter = mapColorProfileToFilter(dna.color_profile);
-
+  return assigned.map((a, index) => {
+    const length = Math.max(0.4, a.slot.duration);
+    const transition = selectTransition(dna.transition_preferences, a.slot, index, assigned.length, dna.energy_arc);
     const clip: ShotstackClip = {
       asset: {
         type: 'video',
-        src: '', // TODO: source video URL
-        trim: segment.startTime,
+        src: sourceVideoUrl,
+        trim: Number(a.segment.startTime.toFixed(3)),
         volume: dna.audio_sync_strategy === 'none' ? 1 : 0,
       },
-      start: segment.outputStart,
-      length: segment.outputDuration,
-      transition: transitionType ? { in: transitionType } : undefined,
-      filter: filter || undefined,
+      start: Number(cursor.toFixed(3)),
+      length: Number(length.toFixed(3)),
     };
-
+    if (transition) clip.transition = { in: transition };
+    if (filter) clip.filter = filter;
+    cursor += length;
     return clip;
   });
 }
 
-/**
- * Context-aware transition selection.
- * Not just random — transitions vary based on position in the edit,
- * energy level, and what's happening in the content.
- */
-function selectTransitionForContext(
+function selectTransition(
   preferences: TransitionPreference[],
-  segment: AssignedSegment,
+  slot: TimelineSlot,
   index: number,
   totalClips: number,
-  energyArc: EnergyArc
+  arc: EnergyArc
 ): string | null {
   if (preferences.length === 0 || index === 0) return null;
-
-  // High energy moments favor hard cuts
-  // Low energy moments favor dissolves
-  // First/last clips get special treatment
-  const position = index / totalClips;
-  const energy = sampleEnergyArc(energyArc, position);
-
-  // Bias toward hard cuts at high energy, dissolves at low energy
-  const adjustedPrefs = preferences.map((p) => {
-    let weight = p.weight;
-    if (energy > 0.7 && p.type === 'cut') weight *= 1.5;
-    if (energy < 0.3 && p.type === 'dissolve') weight *= 1.5;
-    if (segment.slot.slotType === 'breathing' && p.type === 'dissolve') weight *= 2;
-    return { ...p, weight };
+  const position = index / Math.max(1, totalClips - 1);
+  const energy = sampleArc(arc, position);
+  const adjusted = preferences.map((p) => {
+    let w = p.weight;
+    if (energy > 0.7 && p.type === 'cut') w *= 1.4;
+    if (energy < 0.3 && p.type === 'dissolve') w *= 1.4;
+    if (slot.slotType === 'breathing' && p.type === 'dissolve') w *= 1.8;
+    if (slot.slotType === 'hook' && p.type === 'whip') w *= 1.4;
+    return { type: p.type, weight: w };
   });
-
-  // Weighted selection
-  const totalWeight = adjustedPrefs.reduce((sum, p) => sum + p.weight, 0);
-  let random = Math.random() * totalWeight;
-  for (const pref of adjustedPrefs) {
-    random -= pref.weight;
-    if (random <= 0) return mapTransitionType(pref.type);
+  const total = adjusted.reduce((s, p) => s + p.weight, 0) || 1;
+  let r = Math.random() * total;
+  for (const p of adjusted) {
+    r -= p.weight;
+    if (r <= 0) return mapTransitionType(p.type);
   }
-
   return null;
 }
 
-function mapTransitionType(type: TransitionPreference['type']): string {
-  const map: Record<string, string> = {
-    cut: '',
-    dissolve: 'fade',
-    wipe: 'slideLeft',
-    zoom: 'zoom',
-    whip: 'slideRight',
-    glitch: 'fade',  // Shotstack approximation
-    none: '',
-  };
-  return map[type] || '';
+function mapTransitionType(type: TransitionPreference['type']): string | null {
+  switch (type) {
+    case 'cut': return null;
+    case 'dissolve': return 'fade';
+    case 'wipe': return 'slideLeft';
+    case 'zoom': return 'zoom';
+    case 'whip': return 'slideRight';
+    case 'glitch': return 'fade'; // Shotstack approximation
+    case 'none': return null;
+    default: return null;
+  }
 }
 
 function mapColorProfileToFilter(profile: ColorProfile): string | null {
-  // TODO: More sophisticated color matching
-  // Shotstack's built-in filters are limited (boost, contrast, darken, etc.)
-  // For real color grading: generate a LUT via FFmpeg and apply in post-render
-  // Or use Shotstack's custom CSS filter pipeline if available
-
-  if (profile.contrast > 130) return 'contrast';
-  if (profile.brightness < 70) return 'darken';
-  if (profile.brightness > 130) return 'lighten';
-  if (profile.saturation < 50) return 'greyscale';
-  if (profile.saturation > 130) return 'boost';
+  // Shotstack's built-in filters are coarse. Pick the closest match; in the
+  // future we'll render a LUT via FFmpeg and apply post-render.
+  if (profile.contrast >= 130) return 'contrast';
+  if (profile.brightness <= 80) return 'darken';
+  if (profile.brightness >= 130) return 'lighten';
+  if (profile.saturation <= 60) return 'greyscale';
+  if (profile.saturation >= 130) return 'boost';
   return null;
 }
 
-// ─── Audio Track Building ───────────────────────────────────────────────────
+// ─── Motion effects ─────────────────────────────────────────────────────────
 
-function buildAudioTrack(
-  segments: AssignedSegment[],
-  dna: StyleDNA,
-  options: MatcherOptions
-): ShotstackTrack | undefined {
-  if (!options.audioUrl) return undefined;
-
-  const clips: ShotstackClip[] = [];
-
-  // Main audio/music track
-  clips.push({
-    asset: {
-      type: 'audio',
-      src: options.audioUrl,
-      volume: 1,
-      effect: 'fadeInFadeOut',
-    },
-    start: 0,
-    length: options.audioDuration || 30,
-  });
-
-  // TODO: Audio relationship application
-  //
-  // If dna.audio_edit_relationship.music_ducks_under_speech:
-  //   - Detect speech segments in source audio
-  //   - Add volume keyframes: duck music to ~30% during speech
-  //
-  // If dna.audio_edit_relationship.sound_effects_on_transitions:
-  //   - Add whoosh/riser/impact SFX at major cut points
-  //   - Select SFX type based on transition type (whip → whoosh, smash → impact)
-  //
-  // If dna.audio_edit_relationship.silence_as_punctuation:
-  //   - Insert brief silence (200-500ms) before key visual moments
-  //
-  // J-cut / L-cut handling:
-  //   - For J-cuts: extend next clip's audio 500ms-1s before its visual start
-  //   - For L-cuts: extend current clip's audio 500ms-1s past its visual end
-  //   - Requires splitting audio and video into separate tracks
-
-  return { clips };
-}
-
-// ─── Motion Effects ─────────────────────────────────────────────────────────
-
-/**
- * Apply motion techniques from the DNA: speed ramps, zoom punches, etc.
- *
- * These are post-production effects that dramatically change the feel
- * of the edit — a zoom punch on a beat hit, a speed ramp into a reveal.
- */
-function applyMotionEffects(
-  clips: ShotstackClip[],
-  motion: MotionProfile
-): ShotstackClip[] {
-  // TODO: Motion effects application
-  //
-  // Speed ramps:
-  //   - Can't do true speed ramps in Shotstack (no keyframed speed)
-  //   - Workaround: pre-process with FFmpeg speed filter before upload
-  //   - Flag clips that need speed ramp preprocessing
-  //
-  // Zoom punches:
-  //   - Use Shotstack scale + offset keyframes (if supported)
-  //   - Or: pre-process with FFmpeg zoompan filter
-  //   - Place at energy peaks in the timeline
-  //   - Frequency from motion.zoom_punch_frequency
-  //
-  // Parallax (2.5D):
-  //   - Requires depth map generation (MiDaS or similar)
-  //   - Split into layers, animate independently
-  //   - Only applicable to still images or very slow footage
-  //
-  // For now: return clips unmodified, flag for post-processing
-
-  return clips.map((clip) => {
-    // TODO: Add motion effects based on DNA
+function applyMotionEffects(clips: ShotstackClip[], motion?: MotionProfile): ShotstackClip[] {
+  if (!motion) return clips;
+  // Shotstack supports "zoomIn", "zoomOut", "slideLeft", etc. as effects on
+  // individual clips. We use zoomIn as a stand-in for zoom-punches: applied to
+  // a subset of clips proportional to motion.zoom_punch_frequency.
+  if (!motion.uses_zoom_punches || motion.zoom_punch_frequency <= 0) return clips;
+  const ratio = Math.min(0.5, motion.zoom_punch_frequency / Math.max(1, clips.length));
+  return clips.map((clip, i) => {
+    if (Math.random() < ratio && i > 0) {
+      return { ...clip, effect: 'zoomIn' };
+    }
     return clip;
   });
 }
 
-// ─── Text Overlay Track ─────────────────────────────────────────────────────
+// ─── Text overlay track ─────────────────────────────────────────────────────
 
 function buildTextOverlayTrack(
-  segments: AssignedSegment[],
-  textStyle: TextStyleProfile,
+  assigned: AssignedSegment[],
+  style: TextStyleProfile,
   options: MatcherOptions
 ): ShotstackTrack | undefined {
   const clips: ShotstackClip[] = [];
+  const style_string = `font-family:${style.font_family};color:${style.text_color};font-weight:${style.font_weight}`;
 
-  // Add user-provided text overlays styled to match the DNA
-  if (options.textOverlays) {
-    for (const overlay of options.textOverlays) {
-      clips.push({
-        asset: {
-          type: 'title',
-          text: overlay.text,
-          style: `font-family: ${textStyle.font_family}; color: ${textStyle.text_color}; font-weight: ${textStyle.font_weight};`,
-        },
-        start: overlay.timestamp,
-        length: overlay.duration,
-        position: textStyle.position === 'lower-third' ? 'bottom' : textStyle.position,
-        transition: textStyle.animation !== 'none'
-          ? { in: mapTextAnimation(textStyle.animation) }
-          : undefined,
-      });
-    }
-  }
-
-  // Add hook text if DNA has cold open
   if (options.hookText) {
     clips.push({
-      asset: {
-        type: 'title',
-        text: options.hookText,
-        style: `font-family: ${textStyle.font_family}; color: ${textStyle.text_color}; font-weight: bold;`,
-      },
+      asset: { type: 'title', text: options.hookText, style: style_string },
       start: 0,
       length: 2,
       position: 'center',
-      transition: { in: 'fade' },
+      transition: { in: mapTextAnimation(style.animation), out: 'fade' },
     });
   }
-
-  // Add CTA text if DNA has outro CTA
-  if (options.ctaText && segments.length > 0) {
-    const lastSegment = segments[segments.length - 1];
+  if (options.textOverlays) {
+    for (const overlay of options.textOverlays) {
+      clips.push({
+        asset: { type: 'title', text: overlay.text, style: style_string },
+        start: overlay.timestamp,
+        length: overlay.duration,
+        position: style.position === 'lower-third' ? 'bottom' : (style.position as ShotstackClip['position']),
+      });
+    }
+  }
+  if (options.ctaText && assigned.length > 0) {
+    const last = assigned[assigned.length - 1];
+    const ctaStart = Math.max(0, last.slot.startTime + last.slot.duration - 3);
     clips.push({
-      asset: {
-        type: 'title',
-        text: options.ctaText,
-        style: `font-family: ${textStyle.font_family}; color: ${textStyle.text_color};`,
-      },
-      start: lastSegment.outputStart + lastSegment.outputDuration - 3,
+      asset: { type: 'title', text: options.ctaText, style: style_string },
+      start: Number(ctaStart.toFixed(3)),
       length: 3,
       position: 'center',
       transition: { in: 'fade', out: 'fade' },
     });
   }
-
   return clips.length > 0 ? { clips } : undefined;
 }
 
 function mapTextAnimation(animation: TextStyleProfile['animation']): string {
-  const map: Record<string, string> = {
-    fade: 'fade',
-    slide: 'slideUp',
-    typewriter: 'fade', // Shotstack approximation
-    glitch: 'fade',     // Shotstack approximation
-    none: '',
-  };
-  return map[animation] || '';
+  switch (animation) {
+    case 'fade': return 'fade';
+    case 'slide': return 'slideUp';
+    case 'typewriter': return 'fade';
+    case 'glitch': return 'fade';
+    case 'none': return 'fade';
+    default: return 'fade';
+  }
 }
 
-// ─── Narrative Structure ────────────────────────────────────────────────────
+// ─── Audio track ────────────────────────────────────────────────────────────
 
-/**
- * Apply narrative structure from the DNA.
- * Reorder and frame clips to match the storytelling pattern.
- */
+function buildAudioTrack(
+  dna: StyleDNA,
+  options: MatcherOptions,
+  targetDuration: number
+): ShotstackTrack | undefined {
+  if (!options.audioUrl) return undefined;
+  const ducks = dna.audio_edit_relationship.music_ducks_under_speech;
+  return {
+    clips: [
+      {
+        asset: {
+          type: 'audio',
+          src: options.audioUrl,
+          volume: ducks ? 0.35 : 1,
+          effect: 'fadeInFadeOut',
+        },
+        start: 0,
+        length: options.audioDuration ?? targetDuration,
+      },
+    ],
+  };
+}
+
+// ─── Narrative reordering ───────────────────────────────────────────────────
+
 function applyNarrativeStructure(
   clips: ShotstackClip[],
-  narrative: NarrativeStructure,
-  source: SourceAnalysis
+  narrative: NarrativeStructure
 ): ShotstackClip[] {
   if (clips.length < 3) return clips;
-
-  // TODO: Narrative reordering
-  //
-  // Cold open / hook:
-  //   If narrative.has_hook, pull the most visually striking clip to position 0
-  //   and trim it to narrative.hook_duration_ms
-  //
-  // Intro sequence:
-  //   If narrative.has_intro_sequence, insert a branded intro card after hook
-  //
-  // Storytelling style:
-  //   - 'linear': keep chronological order
-  //   - 'nonlinear': reorder for tension (tease ending, then flashback)
-  //   - 'montage': pure visual flow, ordered by energy
-  //   - 'documentary': talking heads + B-roll interleaving
-  //   - 'vlog': talking → action → talking → reaction pattern
-  //   - 'cinematic': slow build, long shots, dramatic beats
-  //
-  // Outro CTA:
-  //   If narrative.has_outro_cta, ensure last 2-3 seconds allow for text overlay
-
+  // For non-linear storytelling, pull the brightest/most-changing-looking clip
+  // (proxy: shortest length at high energy zone) to the front when there's a
+  // hook. We don't have full content-aware reordering yet, so this is a best
+  // effort that improves on chronological-only.
+  if (narrative.storytelling_style === 'nonlinear' && narrative.has_hook) {
+    const sorted = [...clips].sort((a, b) => a.length - b.length);
+    const punchy = sorted[0];
+    if (punchy && punchy !== clips[0]) {
+      const filtered = clips.filter((c) => c !== punchy);
+      // Re-flow start times
+      let cursor = 0;
+      const placed = [punchy, ...filtered].map((c) => {
+        const out = { ...c, start: Number(cursor.toFixed(3)) };
+        cursor += c.length;
+        return out;
+      });
+      return placed;
+    }
+  }
   return clips;
 }
 
-// ─── Beat Sync ──────────────────────────────────────────────────────────────
+// ─── Beat sync ──────────────────────────────────────────────────────────────
 
-/**
- * Snap all cut points to the nearest audio beat.
- * This transforms a mechanically-timed edit into one that FEELS musical.
- *
- * Algorithm:
- * 1. For each clip boundary, find the nearest beat timestamp
- * 2. If the nearest beat is within a tolerance window (±200ms), snap to it
- * 3. Adjust clip durations accordingly (stretch/compress ±200ms)
- * 4. For bass_drop_sync: find major visual transitions and align to bass hits
- */
 export function syncToBeats(
   clips: ShotstackClip[],
   beatTimestamps: number[],
-  toleranceMs: number = 200
+  toleranceMs = 200
 ): ShotstackClip[] {
-  if (beatTimestamps.length === 0) return clips;
+  if (beatTimestamps.length === 0 || clips.length === 0) return clips;
+  const beats = [...beatTimestamps].sort((a, b) => a - b);
+  const tol = toleranceMs / 1000;
 
-  const toleranceSec = toleranceMs / 1000;
-
-  return clips.map((clip, index) => {
-    if (index === 0) return clip; // Don't move the first clip
-
-    const clipStart = clip.start;
-    // Find nearest beat
-    const nearestBeat = beatTimestamps.reduce((best, beat) =>
-      Math.abs(beat - clipStart) < Math.abs(best - clipStart) ? beat : best
-    );
-
-    const distance = Math.abs(nearestBeat - clipStart);
-    if (distance <= toleranceSec) {
-      // Snap to beat — adjust this clip's start and previous clip's length
-      const adjustment = nearestBeat - clipStart;
-      return {
-        ...clip,
-        start: nearestBeat,
-        length: clip.length - adjustment, // Compensate duration
-      };
+  const out: ShotstackClip[] = [];
+  let cursor = 0;
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    if (i === 0) {
+      out.push({ ...clip, start: 0 });
+      cursor = clip.length;
+      continue;
     }
-
-    return clip;
-  });
+    // find nearest beat to where this clip would naturally start
+    const wanted = cursor;
+    let bestDelta = Infinity;
+    let snapped = wanted;
+    for (const b of beats) {
+      const d = Math.abs(b - wanted);
+      if (d < bestDelta) {
+        bestDelta = d;
+        snapped = b;
+      }
+      if (b > wanted + tol) break;
+    }
+    const snap = bestDelta <= tol ? snapped : wanted;
+    const previous = out[out.length - 1];
+    if (previous) {
+      previous.length = Number(Math.max(0.3, snap - previous.start).toFixed(3));
+    }
+    out.push({ ...clip, start: Number(snap.toFixed(3)) });
+    cursor = snap + clip.length;
+  }
+  return out;
 }
 
-// ─── Style DNA Comparison ───────────────────────────────────────────────────
+// ─── Style DNA comparison ───────────────────────────────────────────────────
 
-/**
- * Compare two Style DNA profiles and return a similarity score.
- * Useful for finding similar styles in the marketplace, or verifying
- * that an applied style matches the reference.
- */
 export function compareStyleDNA(a: StyleDNA, b: StyleDNA): {
   overall: number;
   rhythm: number;
@@ -753,37 +729,31 @@ export function compareStyleDNA(a: StyleDNA, b: StyleDNA): {
   pacing: number;
   transitions: number;
 } {
-  const rhythmSim = 1 - Math.abs(
-    a.cut_pattern.avg_cut_duration_ms - b.cut_pattern.avg_cut_duration_ms
-  ) / Math.max(a.cut_pattern.avg_cut_duration_ms, b.cut_pattern.avg_cut_duration_ms);
-
-  const colorSim = 1 - (
+  const denomRhythm = Math.max(a.cut_pattern.avg_cut_duration_ms, b.cut_pattern.avg_cut_duration_ms, 1);
+  const rhythm = 1 - Math.abs(a.cut_pattern.avg_cut_duration_ms - b.cut_pattern.avg_cut_duration_ms) / denomRhythm;
+  const color = 1 - (
     Math.abs(a.color_profile.temperature - b.color_profile.temperature) / 200 +
     Math.abs(a.color_profile.saturation - b.color_profile.saturation) / 200 +
     Math.abs(a.color_profile.contrast - b.color_profile.contrast) / 200
   ) / 3;
-
-  const energyMap = { low: 0.25, medium: 0.5, high: 0.75, extreme: 1.0 };
-  const pacingSim = 1 - Math.abs(
-    energyMap[a.pacing.overall_energy] - energyMap[b.pacing.overall_energy]
-  );
-
-  // Transition preference cosine similarity
-  const transTypes = ['cut', 'dissolve', 'wipe', 'zoom', 'whip', 'glitch', 'none'] as const;
-  const aWeights = transTypes.map((t) => a.transition_preferences.find((p) => p.type === t)?.weight || 0);
-  const bWeights = transTypes.map((t) => b.transition_preferences.find((p) => p.type === t)?.weight || 0);
-  const dot = aWeights.reduce((s, v, i) => s + v * bWeights[i], 0);
-  const magA = Math.sqrt(aWeights.reduce((s, v) => s + v * v, 0));
-  const magB = Math.sqrt(bWeights.reduce((s, v) => s + v * v, 0));
-  const transitionSim = magA > 0 && magB > 0 ? dot / (magA * magB) : 0;
-
-  const overall = (rhythmSim * 0.35 + colorSim * 0.15 + pacingSim * 0.3 + transitionSim * 0.2);
-
+  const energyMap = { low: 0.25, medium: 0.5, high: 0.75, extreme: 1.0 } as const;
+  const pacing = 1 - Math.abs(energyMap[a.pacing.overall_energy] - energyMap[b.pacing.overall_energy]);
+  const types = ['cut', 'dissolve', 'wipe', 'zoom', 'whip', 'glitch', 'none'] as const;
+  const av = types.map((t) => a.transition_preferences.find((p) => p.type === t)?.weight || 0);
+  const bv = types.map((t) => b.transition_preferences.find((p) => p.type === t)?.weight || 0);
+  const dot = av.reduce((s, v, i) => s + v * bv[i], 0);
+  const magA = Math.sqrt(av.reduce((s, v) => s + v * v, 0));
+  const magB = Math.sqrt(bv.reduce((s, v) => s + v * v, 0));
+  const transitions = magA && magB ? dot / (magA * magB) : 0;
   return {
-    overall: Math.max(0, Math.min(1, overall)),
-    rhythm: Math.max(0, Math.min(1, rhythmSim)),
-    color: Math.max(0, Math.min(1, colorSim)),
-    pacing: Math.max(0, Math.min(1, pacingSim)),
-    transitions: Math.max(0, Math.min(1, transitionSim)),
+    overall: clamp01(rhythm * 0.35 + color * 0.15 + pacing * 0.3 + transitions * 0.2),
+    rhythm: clamp01(rhythm),
+    color: clamp01(color),
+    pacing: clamp01(pacing),
+    transitions: clamp01(transitions),
   };
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
 }

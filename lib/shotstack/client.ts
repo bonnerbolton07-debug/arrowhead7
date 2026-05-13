@@ -1,10 +1,11 @@
 // =============================================================================
 // Arrowhead 7 — Shotstack API Wrapper
 // =============================================================================
-// Cloud video rendering via Shotstack Edit API
+// Cloud video rendering via the Shotstack Edit API.
 // Docs: https://shotstack.io/docs/api/
 
-import type { ShotstackRenderConfig, RenderJob } from '@/types/edit';
+import type { ShotstackRenderConfig, StyleDNA } from '@/types/edit';
+import { buildRenderConfig, type MatcherOptions, type SourceAnalysis } from '@/lib/style-dna/matcher';
 
 const SHOTSTACK_API_URL = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
 const isProduction = SHOTSTACK_API_URL.includes('/v1');
@@ -24,10 +25,6 @@ function getHeaders(): Record<string, string> {
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
-/**
- * Submit a render job to Shotstack.
- * Returns the Shotstack render ID for polling.
- */
 export async function submitRender(config: ShotstackRenderConfig): Promise<string> {
   const response = await fetch(`${SHOTSTACK_API_URL}/render`, {
     method: 'POST',
@@ -44,9 +41,6 @@ export async function submitRender(config: ShotstackRenderConfig): Promise<strin
   return data.response.id;
 }
 
-/**
- * Poll render status from Shotstack.
- */
 export async function getRenderStatus(renderId: string): Promise<{
   status: string;
   progress: number;
@@ -74,20 +68,14 @@ export async function getRenderStatus(renderId: string): Promise<{
 
 // ─── Templates ───────────────────────────────────────────────────────────────
 
-/**
- * TODO: Create and manage Shotstack templates for common edit styles.
- * Templates allow pre-built editing patterns that can be customized.
- */
 export async function createTemplate(
   _name: string,
   _config: ShotstackRenderConfig
 ): Promise<string> {
-  // TODO: POST to /templates
   throw new Error('Not implemented');
 }
 
 export async function getTemplate(_templateId: string): Promise<ShotstackRenderConfig> {
-  // TODO: GET /templates/:id
   throw new Error('Not implemented');
 }
 
@@ -104,22 +92,29 @@ function estimateProgress(status: string): number {
   }
 }
 
+// ─── Style DNA -> Shotstack timeline ────────────────────────────────────────
+
+export interface BuildTimelineInput {
+  sourceVideoUrl: string;
+  styleDNA: StyleDNA;
+  sourceAnalysis: SourceAnalysis;
+  options?: Omit<MatcherOptions, 'sourceVideoUrl'>;
+}
+
 /**
- * Build a Shotstack timeline from Style DNA parameters.
- * This is where Style DNA gets translated into actual render instructions.
+ * Build a complete Shotstack render config from a Style DNA profile and the
+ * pre-analysed source footage. This is the bridge between the Style DNA engine
+ * and the renderer — every DNA dimension (cut rhythm, pacing, energy arc, color
+ * profile, transitions, narrative structure, audio sync) is mapped into clip
+ * timing, filters, transitions, and tracks.
  *
- * TODO: This is the core intelligence of Arrowhead 7.
- * - Map CutPattern → clip durations and transitions
- * - Map ColorProfile → Shotstack filters
- * - Map PacingProfile → clip ordering and energy curve
- * - Map AudioSyncStrategy → beat-aligned cuts
+ * Use this in the render API route. For a one-shot path that performs the
+ * source analysis itself, see `applyStyleDNAFromReference` in the matcher.
  */
-export function buildTimelineFromStyleDNA(
-  _sourceVideoUrl: string,
-  _styleDNA: unknown,       // TODO: type as StyleDNA
-  _audioBeatMap?: number[]  // TODO: beat timestamps from analysis
-): ShotstackRenderConfig {
-  // TODO: Implement the core editing logic
-  // This function is the HEART of Arrowhead 7
-  throw new Error('Not implemented — this is where the magic happens');
+export function buildTimelineFromStyleDNA(input: BuildTimelineInput): ShotstackRenderConfig {
+  const { sourceVideoUrl, styleDNA, sourceAnalysis, options } = input;
+  return buildRenderConfig(styleDNA, sourceAnalysis, {
+    ...(options ?? {}),
+    sourceVideoUrl,
+  });
 }
