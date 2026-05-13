@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Logo, LogoIcon } from '@/components/ui/Logo';
 import { getClient } from '@/lib/supabase/client';
+import {
+  EditorStrategyBanner,
+  useStrategyBrief,
+} from '@/components/strategy/EditorStrategyBanner';
+import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
+import type { StrategyPlatform } from '@/types/strategy';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -28,6 +34,7 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 }
 
 export default function EditorPage() {
+  const strategyBrief = useStrategyBrief();
   const [step, setStep] = useState<Step>('reference');
 
   // Step 1 — Reference
@@ -318,7 +325,8 @@ export default function EditorPage() {
         </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-8 relative z-10">
+      <main className="flex-1 flex flex-col items-center justify-center p-8 relative z-10">
+        {strategyBrief && <EditorStrategyBanner brief={strategyBrief} />}
         {step === 'reference' && (
           <div className="w-full max-w-xl">
             <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Upload a Reference</h2>
@@ -533,10 +541,13 @@ export default function EditorPage() {
                   />
                 </svg>
                 <h2 className="text-xl font-bold mb-2 text-a7-text">Edit Complete</h2>
-                <p className="text-a7-text/40 text-sm mb-8">
+                <p className="text-a7-text/40 text-sm mb-6">
                   Your video is ready.
                 </p>
-                <div className="flex gap-3">
+                <PostRenderPlan
+                  preferredPlatform={strategyBrief?.platform as StrategyPlatform | undefined}
+                />
+                <div className="flex gap-3 mt-6">
                   <a
                     href={outputUrl || '#'}
                     target="_blank"

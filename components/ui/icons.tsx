@@ -186,3 +186,85 @@ export function BoltIcon({ size = 24, className = '', gradient = 'teal' }: IconP
     </svg>
   );
 }
+
+export function CompassIcon({ size = 24, className = '', gradient = 'dual' }: IconProps) {
+  const id = uid('compass');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="12" cy="12" r="9" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <polygon points="12,7 15,12 12,17 9,12" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function CalendarIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('calendar');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <line x1="3" y1="10" x2="21" y2="10" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <line x1="8" y1="3" x2="8" y2="7" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="16" y1="3" x2="16" y2="7" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function TrendIcon({ size = 24, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('trend');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <polyline points="3,17 9,11 13,15 21,7" fill="none" stroke={`url(#${id})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points="14,7 21,7 21,14" fill="none" stroke={`url(#${id})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function TargetIcon({ size = 24, className = '', gradient = 'teal' }: IconProps) {
+  const id = uid('target');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <circle cx="12" cy="12" r="9" fill="none" stroke={`url(#${id})`} strokeWidth="1.6" />
+      <circle cx="12" cy="12" r="5" fill="none" stroke={`url(#${id})`} strokeWidth="1.6" />
+      <circle cx="12" cy="12" r="1.5" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function HookIcon({ size = 24, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('hook');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M12 3v9" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M12 12a5 5 0 1 0 5 5" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="3" r="1.5" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
+export function LockIcon({ size = 18, className = '', gradient = 'copper' }: IconProps) {
+  const id = uid('lock');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function GaugeIcon({ size = 24, className = '', gradient = 'dual' }: IconProps) {
+  const id = uid('gauge');
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} className={className}>
+      <GradientDef id={id} gradient={gradient} />
+      <path d="M4 18a8 8 0 1 1 16 0" fill="none" stroke={`url(#${id})`} strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="12" y1="18" x2="16" y2="10" stroke={`url(#${id})`} strokeWidth="2" strokeLinecap="round" />
+      <circle cx="12" cy="18" r="1.5" fill={`url(#${id})`} />
+    </svg>
+  );
+}

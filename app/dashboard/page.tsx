@@ -1,77 +1,21 @@
-import { Logo, LogoIcon } from '@/components/ui/Logo';
+import { DashboardSidebar } from '@/components/ui/DashboardSidebar';
+import { RecommendedForYou } from '@/components/strategy/RecommendedForYou';
 import { getUser, isSupabaseConfigured } from '@/lib/supabase/server';
+import { getUserTier } from '@/lib/strategy-brain/gating';
 
 export default async function DashboardPage() {
   const user = await getUser();
   const supabaseReady = isSupabaseConfigured();
+  const access = await getUserTier();
+  const tierLabel = access
+    ? access.tier.charAt(0).toUpperCase() + access.tier.slice(1) + ' Tier'
+    : 'Free Tier';
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-a7-base to-a7-void">
-      {/* Sidebar */}
-      <aside className="fixed left-0 top-0 bottom-0 w-64 p-6 border-r border-a7-text/[0.04]"
-        style={{ background: 'linear-gradient(180deg, #0E0E0C, #0A0A0A)' }}>
-        <div className="absolute top-0 left-0 right-0 h-px"
-          style={{ background: 'linear-gradient(90deg, rgba(45,212,191,0.15), rgba(184,115,51,0.1), transparent)' }} />
+      <DashboardSidebar active="home" user={user} tierLabel={tierLabel} />
 
-        <a href="/" className="flex items-center gap-2 mb-10">
-          <Logo variant="dual" size="sm" wordmark />
-        </a>
-
-        <nav className="space-y-1">
-          {[
-            { label: 'Dashboard', href: '/dashboard', active: true },
-            { label: 'My Edits', href: '/dashboard/edits', active: false },
-            { label: 'Style DNA', href: '/dashboard/styles', active: false },
-            { label: 'Smart Vault', href: '/vault', active: false },
-            { label: 'Channels', href: '/dashboard/channels', active: false },
-            { label: 'Settings', href: '/dashboard/settings', active: false },
-          ].map((item) => (
-            <a
-              key={item.label}
-              href={item.href}
-              className={`block px-3 py-2 rounded-md text-sm transition-all relative overflow-hidden ${
-                item.active ? 'font-medium' : 'text-a7-text/40 hover:text-a7-text'
-              }`}
-              style={item.active ? {
-                background: 'linear-gradient(135deg, rgba(45,212,191,0.08), rgba(45,212,191,0.02))',
-                border: '1px solid rgba(45,212,191,0.1)',
-                boxShadow: '0 0 12px rgba(45,212,191,0.06)',
-              } : {}}
-            >
-              {item.active && (
-                <div className="absolute top-0 left-0 right-0 h-px"
-                  style={{ background: 'linear-gradient(90deg, rgba(45,212,191,0.3), transparent)' }} />
-              )}
-              <span className={item.active ? 'text-grad-teal' : ''}>{item.label}</span>
-            </a>
-          ))}
-        </nav>
-
-        <div className="absolute bottom-6 left-6 right-6 space-y-3">
-          <div className="rounded-lg p-4 relative overflow-hidden"
-            style={{
-              background: 'linear-gradient(135deg, rgba(184,115,51,0.06), rgba(184,115,51,0.02))',
-              border: '1px solid rgba(184,115,51,0.1)',
-              boxShadow: '0 0 15px rgba(184,115,51,0.06)',
-            }}>
-            <div className="absolute top-0 left-0 right-0 h-px"
-              style={{ background: 'linear-gradient(90deg, rgba(184,115,51,0.3), transparent)' }} />
-            <div className="text-xs text-a7-text/30 mb-1">Credits Remaining</div>
-            <div className="text-2xl font-bold text-grad-copper">3</div>
-            <div className="text-xs text-a7-text/20 mt-1">Free Tier</div>
-          </div>
-          {user && (
-            <a
-              href="/api/auth/signout"
-              className="block w-full text-center px-3 py-2 rounded-md text-xs text-a7-text/40 hover:text-a7-text transition-colors border border-a7-text/[0.06]"
-            >
-              Sign out
-            </a>
-          )}
-        </div>
-      </aside>
-
-      <main className="ml-64 p-8">
+      <main className="md:ml-64 p-6 md:p-8">
         <div className="max-w-5xl">
           <h1 className="text-2xl font-bold mb-2 text-a7-text">Dashboard</h1>
           <p className="text-a7-text/40 text-sm mb-8">
@@ -142,7 +86,9 @@ export default async function DashboardPage() {
             </a>
           </div>
 
-          <h2 className="text-lg font-semibold mb-4 text-a7-text">Recent Edits</h2>
+          <RecommendedForYou unlocked={access?.unlocked ?? false} />
+
+          <h2 className="text-lg font-semibold mb-4 text-a7-text mt-12">Recent Edits</h2>
           <div className="relative overflow-hidden rounded-lg p-12 text-center"
             style={{
               background: 'linear-gradient(180deg, #10100E, #0C0C0A)',
