@@ -9,6 +9,8 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getRenderStatus } from '@/lib/shotstack/client';
 import { uploadFromUrl } from '@/lib/cloudflare/stream';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
@@ -96,7 +98,32 @@ export async function GET(request: NextRequest) {
         .update({ status: 'failed' })
         .eq('id', job.edit_id);
 
-      // TODO: Refund credit on failure
+      // Refund the credit that was debited at submission time. Idempotent:
+      // we only refund once by checking for an existing refund transaction.
+      const { data: existingRefund } = await supabase
+        .from('credit_transactions')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('reason', 'refund')
+        .eq('reference_id', job.edit_id)
+        .maybeSingle();
+
+      if (!existingRefund) {
+        const { data: refunded } = await supabase.rpc('refund_credit', {
+          p_user_id: user.id,
+          p_amount: 1,
+        });
+        const newBalance = refunded?.[0]?.credits_remaining;
+        if (typeof newBalance === 'number') {
+          await supabase.from('credit_transactions').insert({
+            user_id: user.id,
+            amount: 1,
+            balance_after: newBalance,
+            reason: 'refund',
+            reference_id: job.edit_id,
+          });
+        }
+      }
 
       return NextResponse.json({
         status: 'failed',

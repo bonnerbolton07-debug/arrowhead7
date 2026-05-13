@@ -79,6 +79,9 @@ CREATE TABLE public.edits (
   -- Style DNA reference
   style_dna_id UUID REFERENCES public.style_dna(id) ON DELETE SET NULL,
 
+  -- Reference URLs provided by user (social media links, uploaded videos)
+  reference_urls TEXT[] NOT NULL DEFAULT '{}',
+
   -- Render config
   render_config JSONB,
 
@@ -282,6 +285,7 @@ CREATE POLICY "Users can update own distributions" ON public.distributions FOR U
 
 -- Credit transactions: users can view their own
 CREATE POLICY "Users can view own transactions" ON public.credit_transactions FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can create own transactions" ON public.credit_transactions FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 -- Subscriptions: users can view their own
 CREATE POLICY "Users can view own subscription" ON public.subscriptions FOR SELECT USING (auth.uid() = user_id);
@@ -328,3 +332,42 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
+
+-- ─── Credit Atomic Operations ──────────────────────────────────────────────
+-- Atomic debit: deducts only if balance is sufficient. Returns the new
+-- balance, or no rows if the balance was insufficient.
+CREATE OR REPLACE FUNCTION public.debit_credit(p_user_id uuid, p_amount int)
+RETURNS TABLE(credits_remaining int, credits_used_total int)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
+    RAISE EXCEPTION 'unauthorized';
+  END IF;
+  RETURN QUERY
+    UPDATE public.profiles
+       SET credits_remaining = profiles.credits_remaining - p_amount,
+           credits_used_total = profiles.credits_used_total + p_amount
+     WHERE id = p_user_id
+       AND profiles.credits_remaining >= p_amount
+    RETURNING profiles.credits_remaining, profiles.credits_used_total;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.refund_credit(p_user_id uuid, p_amount int)
+RETURNS TABLE(credits_remaining int, credits_used_total int)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
+    RAISE EXCEPTION 'unauthorized';
+  END IF;
+  RETURN QUERY
+    UPDATE public.profiles
+       SET credits_remaining = profiles.credits_remaining + p_amount,
+           credits_used_total = GREATEST(profiles.credits_used_total - p_amount, 0)
+     WHERE id = p_user_id
+    RETURNING profiles.credits_remaining, profiles.credits_used_total;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.debit_credit(uuid, int) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.refund_credit(uuid, int) TO authenticated;

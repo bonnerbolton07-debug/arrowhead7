@@ -36,3 +36,6 @@ next-env.d.ts
 
 # claude code local state
 .claude/
+
+# supabase CLI local state (linked-project, pooler, etc.)
+/supabase/.temp/
