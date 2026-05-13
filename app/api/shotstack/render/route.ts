@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { submitRender } from '@/lib/shotstack/client';
+import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,10 +56,22 @@ export async function POST(request: NextRequest) {
 
     const newBalance = debited[0].credits_remaining as number;
 
+    // Look up subscription tier so we can stamp the free-tier watermark.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('subscription_tier')
+      .eq('id', user.id)
+      .single();
+
+    const finalConfig = applyWatermarkIfRequired(
+      edit.render_config,
+      profile?.subscription_tier ?? null
+    );
+
     // Submit to Shotstack
     let shotstackRenderId: string;
     try {
-      shotstackRenderId = await submitRender(edit.render_config);
+      shotstackRenderId = await submitRender(finalConfig);
     } catch (renderError) {
       // Refund the credit if the upstream submit fails
       await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });

@@ -31,6 +31,9 @@ type Platform = 'tiktok' | 'reels' | 'shorts' | 'youtube' | 'square';
 
 type AnalyzedStyleDNA = Omit<StyleDNA, 'id' | 'created_at' | 'updated_at'>;
 
+type CaptionStyle = 'tiktok-bold' | 'youtube-bar' | 'karaoke';
+type CaptionState = 'idle' | 'transcribing' | 'done' | 'error' | 'unavailable';
+
 const ALLOWED_MIME = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
 
 function classNames(...parts: Array<string | false | null | undefined>) {
@@ -72,6 +75,11 @@ export default function EditorPage() {
   const [ctaText, setCtaText] = useState<string>('');
   const [matchState, setMatchState] = useState<'idle' | 'matching' | 'ready' | 'error'>('idle');
   const [matchError, setMatchError] = useState<string | null>(null);
+  const [autoCaptions, setAutoCaptions] = useState(false);
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('tiktok-bold');
+  const [captionState, setCaptionState] = useState<CaptionState>('idle');
+  const [captionError, setCaptionError] = useState<string | null>(null);
+  const [captionTranscription, setCaptionTranscription] = useState<unknown>(null);
 
   // Step 5 — Render
   const [renderState, setRenderState] = useState<RenderState>('idle');
@@ -277,7 +285,7 @@ export default function EditorPage() {
     }
   }, [stopPolling]);
 
-  const buildMatch = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+  const buildMatch = useCallback(async (captionsPayload?: unknown): Promise<{ ok: boolean; error?: string }> => {
     if (!editId || !styleDNA) {
       const msg = 'Style DNA missing — go back and run analysis';
       setMatchError(msg);
@@ -302,6 +310,9 @@ export default function EditorPage() {
             ctaText: ctaText.trim() || undefined,
             generateSoundtrack,
             referenceSoundtrackKey: generateSoundtrack && referenceR2Key ? referenceR2Key : undefined,
+            captions: captionsPayload
+              ? { transcription: captionsPayload, style: captionStyle }
+              : undefined,
           },
         }),
       });
@@ -315,7 +326,40 @@ export default function EditorPage() {
       setMatchState('error');
       return { ok: false, error: msg };
     }
-  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, referenceR2Key]);
+  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, referenceR2Key, captionStyle]);
+
+  const transcribeForCaptions = useCallback(async (): Promise<unknown | null> => {
+    if (!autoCaptions || !footageR2Key) return null;
+    if (captionState === 'done' && captionTranscription) return captionTranscription;
+
+    setCaptionState('transcribing');
+    setCaptionError(null);
+    try {
+      const res = await fetch('/api/captions/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaUrl: footageR2Key }),
+      });
+      const data = await res.json();
+      if (res.status === 503) {
+        setCaptionState('unavailable');
+        setCaptionError(data.error || 'Auto-captions are not configured.');
+        return null;
+      }
+      if (!res.ok) {
+        setCaptionState('error');
+        setCaptionError(data.error || `Transcription failed: ${res.status}`);
+        return null;
+      }
+      setCaptionTranscription(data.transcription);
+      setCaptionState('done');
+      return data.transcription;
+    } catch (err) {
+      setCaptionState('error');
+      setCaptionError(err instanceof Error ? err.message : 'Transcription failed');
+      return null;
+    }
+  }, [autoCaptions, footageR2Key, captionState, captionTranscription]);
 
   const startRender = useCallback(async () => {
     if (!editId || !footageR2Key) {
@@ -331,8 +375,11 @@ export default function EditorPage() {
     setRenderProgress(0);
 
     try {
-      // Build the render config from Style DNA + source footage.
-      const matched = await buildMatch();
+      // Optional: run Whisper transcription so the match step can layer in captions.
+      const transcription = autoCaptions ? await transcribeForCaptions() : null;
+
+      // Build the render config from Style DNA + source footage (server-side).
+      const matched = await buildMatch(transcription ?? undefined);
       if (!matched.ok) {
         setRenderState('failed');
         setRenderError(matched.error || 'Failed to compose render plan');
@@ -354,7 +401,7 @@ export default function EditorPage() {
       setRenderState('failed');
       setRenderError(err instanceof Error ? err.message : 'Render failed');
     }
-  }, [editId, footageR2Key, styleDNA, buildMatch, pollStatus]);
+  }, [editId, footageR2Key, styleDNA, buildMatch, pollStatus, autoCaptions, transcribeForCaptions]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -637,6 +684,59 @@ export default function EditorPage() {
               <p className="mt-2 text-[11px] text-a7-text/30">
                 Routed through Mubert / SOUNDRAW when configured. Zero copyright risk.
               </p>
+            </FieldGroup>
+
+            <FieldGroup label="Auto-Captions">
+              <div className="flex items-center justify-between gap-4 mb-3">
+                <span className="text-sm text-a7-text/60">
+                  Transcribe speech and burn captions into the render.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAutoCaptions((v) => !v)}
+                  className="relative w-12 h-6 rounded-full transition-all"
+                  style={{
+                    background: autoCaptions
+                      ? 'linear-gradient(135deg, #1a9e8f, #2DD4BF)'
+                      : 'rgba(245,240,232,0.08)',
+                    boxShadow: autoCaptions ? '0 0 12px rgba(45,212,191,0.3)' : 'none',
+                  }}
+                  aria-pressed={autoCaptions}
+                  aria-label="Toggle auto-captions"
+                >
+                  <span
+                    className="absolute top-0.5 w-5 h-5 rounded-full transition-all"
+                    style={{
+                      left: autoCaptions ? 'calc(100% - 22px)' : '2px',
+                      background: '#F5F0E8',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                    }}
+                  />
+                </button>
+              </div>
+
+              {autoCaptions && (
+                <Segmented
+                  value={captionStyle}
+                  onChange={(v) => setCaptionStyle(v as CaptionStyle)}
+                  options={[
+                    { value: 'tiktok-bold', label: 'TikTok Bold' },
+                    { value: 'youtube-bar', label: 'YouTube Bar' },
+                    { value: 'karaoke', label: 'Karaoke' },
+                  ]}
+                />
+              )}
+
+              {captionState === 'unavailable' && (
+                <p className="mt-3 text-xs" style={{ color: '#E8B06A' }}>
+                  Auto-captions are not configured on this server (missing OPENAI_API_KEY).
+                </p>
+              )}
+              {captionState === 'error' && captionError && (
+                <p className="mt-3 text-xs" style={{ color: '#E8B06A' }}>
+                  {captionError}
+                </p>
+              )}
             </FieldGroup>
 
             <NavButtons onNext={next} onBack={back} disabled={!canAdvance} nextLabel="Continue" />

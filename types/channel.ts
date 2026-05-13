@@ -148,6 +148,8 @@ export interface TierLimit {
   team_collaboration: boolean;
   api_access: boolean;
   ai_generation_unlimited: boolean;
+  auto_captions: boolean;
+  max_concurrent_edits: number; // -1 = unlimited
 }
 
 export const TIER_LIMITS: Record<SubscriptionTier, TierLimit> = {
@@ -164,6 +166,8 @@ export const TIER_LIMITS: Record<SubscriptionTier, TierLimit> = {
     team_collaboration: false,
     api_access: false,
     ai_generation_unlimited: false,
+    auto_captions: false,
+    max_concurrent_edits: 1,
   },
   pro: {
     credits_per_month: 50,
@@ -178,6 +182,8 @@ export const TIER_LIMITS: Record<SubscriptionTier, TierLimit> = {
     team_collaboration: false,
     api_access: false,
     ai_generation_unlimited: false,
+    auto_captions: true,
+    max_concurrent_edits: 5,
   },
   studio: {
     credits_per_month: -1,
@@ -192,6 +198,8 @@ export const TIER_LIMITS: Record<SubscriptionTier, TierLimit> = {
     team_collaboration: true,
     api_access: true,
     ai_generation_unlimited: true,
+    auto_captions: true,
+    max_concurrent_edits: -1,
   },
 };
 

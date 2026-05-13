@@ -4,8 +4,23 @@
 // Cloud video rendering via the Shotstack Edit API.
 // Docs: https://shotstack.io/docs/api/
 
-import type { ShotstackRenderConfig, StyleDNA } from '@/types/edit';
-import { buildRenderConfig, type MatcherOptions, type SourceAnalysis } from '@/lib/style-dna/matcher';
+import type {
+  ShotstackRenderConfig,
+  ShotstackTimeline,
+  ShotstackTrack,
+  ShotstackClip,
+  ShotstackOutput,
+  StyleDNA,
+} from '@/types/edit';
+import {
+  buildRenderConfig,
+  type MatcherOptions,
+  type SourceAnalysis,
+} from '@/lib/style-dna/matcher';
+import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
+import type { SubscriptionTier } from '@/types';
+import type { WhisperTranscription } from '@/lib/captions/whisper';
+import { buildCaptionTrack, type CaptionStyle } from '@/lib/captions/burn-in';
 
 const SHOTSTACK_API_URL = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
 const isProduction = SHOTSTACK_API_URL.includes('/v1');
@@ -94,27 +109,101 @@ function estimateProgress(status: string): number {
 
 // ─── Style DNA -> Shotstack timeline ────────────────────────────────────────
 
+export interface BuildTimelineOptions extends Omit<MatcherOptions, 'sourceVideoUrl'> {
+  /** Override output duration in seconds. */
+  targetDuration?: number;
+  outputFormat?: ShotstackOutput['format'];
+  outputResolution?: ShotstackOutput['resolution'];
+  outputFps?: number;
+  /** When provided, a caption track is added with the given style. */
+  captions?: {
+    transcription: WhisperTranscription;
+    style: CaptionStyle;
+  };
+  /** Subscription tier — drives watermark inclusion when set. */
+  tier?: SubscriptionTier | string | null;
+}
+
 export interface BuildTimelineInput {
   sourceVideoUrl: string;
   styleDNA: StyleDNA;
   sourceAnalysis: SourceAnalysis;
-  options?: Omit<MatcherOptions, 'sourceVideoUrl'>;
+  options?: BuildTimelineOptions;
 }
 
 /**
- * Build a complete Shotstack render config from a Style DNA profile and the
- * pre-analysed source footage. This is the bridge between the Style DNA engine
- * and the renderer — every DNA dimension (cut rhythm, pacing, energy arc, color
- * profile, transitions, narrative structure, audio sync) is mapped into clip
- * timing, filters, transitions, and tracks.
+ * Build a Shotstack render config from Style DNA + analysed source footage.
  *
- * Use this in the render API route. For a one-shot path that performs the
- * source analysis itself, see `applyStyleDNAFromReference` in the matcher.
+ * Two call shapes are supported:
+ *  1. Object form (production path): pass `{ sourceVideoUrl, styleDNA, sourceAnalysis, options }`.
+ *     Delegates to the Style DNA matcher which produces the full cut-rhythm,
+ *     pacing, energy-arc, color and audio-sync timeline.
+ *  2. Positional form (lightweight / pre-analysis fallback): pass
+ *     `(sourceVideoUrl, styleDNA?, options?)`. Returns a minimal-but-valid
+ *     config with a single video clip; useful when the user clicks Render
+ *     before Style DNA analysis finishes.
+ *
+ * In both shapes, options may include `captions` (transcription + style) and
+ * `tier` — captions are layered as their own track, and when `tier` is
+ * provided the watermark is applied via `applyWatermarkIfRequired`.
  */
-export function buildTimelineFromStyleDNA(input: BuildTimelineInput): ShotstackRenderConfig {
-  const { sourceVideoUrl, styleDNA, sourceAnalysis, options } = input;
-  return buildRenderConfig(styleDNA, sourceAnalysis, {
-    ...(options ?? {}),
-    sourceVideoUrl,
-  });
+export function buildTimelineFromStyleDNA(input: BuildTimelineInput): ShotstackRenderConfig;
+export function buildTimelineFromStyleDNA(
+  sourceVideoUrl: string,
+  styleDNA?: StyleDNA | null,
+  options?: BuildTimelineOptions
+): ShotstackRenderConfig;
+export function buildTimelineFromStyleDNA(
+  inputOrUrl: BuildTimelineInput | string,
+  styleDNAArg?: StyleDNA | null,
+  optionsArg?: BuildTimelineOptions
+): ShotstackRenderConfig {
+  let baseConfig: ShotstackRenderConfig;
+  let options: BuildTimelineOptions;
+
+  if (typeof inputOrUrl === 'object') {
+    options = inputOrUrl.options ?? {};
+    baseConfig = buildRenderConfig(inputOrUrl.styleDNA, inputOrUrl.sourceAnalysis, {
+      ...options,
+      sourceVideoUrl: inputOrUrl.sourceVideoUrl,
+    });
+  } else {
+    options = optionsArg ?? {};
+    const duration = options.targetDuration ?? 10;
+    const videoClip: ShotstackClip = {
+      asset: { type: 'video', src: inputOrUrl },
+      start: 0,
+      length: duration,
+    };
+    const timeline: ShotstackTimeline = {
+      tracks: [{ clips: [videoClip] }],
+      background: '#000000',
+    };
+    const output: ShotstackOutput = {
+      format: options.outputFormat ?? 'mp4',
+      resolution: options.outputResolution ?? '1080',
+      fps: options.outputFps ?? 30,
+      quality: 'high',
+    };
+    // styleDNAArg is referenced here so tooling doesn't flag it as unused while
+    // the full matcher remains the object-form path.
+    void styleDNAArg;
+    baseConfig = { timeline, output };
+  }
+
+  if (options.captions) {
+    const captionTrack = buildCaptionTrack(options.captions.transcription, {
+      style: options.captions.style,
+    });
+    if (captionTrack) {
+      const tracks: ShotstackTrack[] = [captionTrack, ...baseConfig.timeline.tracks];
+      baseConfig = {
+        ...baseConfig,
+        timeline: { ...baseConfig.timeline, tracks },
+      };
+    }
+  }
+
+  if (options.tier === undefined) return baseConfig;
+  return applyWatermarkIfRequired(baseConfig, options.tier);
 }
