@@ -246,7 +246,7 @@ export interface RecommendationBundle {
 
 import type { SubscriptionTier } from './channel';
 
-export const STRATEGY_UNLOCKED_TIERS: SubscriptionTier[] = ['pro', 'enterprise'];
+export const STRATEGY_UNLOCKED_TIERS: SubscriptionTier[] = ['pro', 'studio'];
 
 export function isStrategyUnlocked(tier: SubscriptionTier | null | undefined): boolean {
   if (!tier) return false;

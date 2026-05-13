@@ -110,11 +110,6 @@ function estimateProgress(status: string): number {
 // ─── Style DNA -> Shotstack timeline ────────────────────────────────────────
 
 export interface BuildTimelineOptions extends Omit<MatcherOptions, 'sourceVideoUrl'> {
-  /** Override output duration in seconds. */
-  targetDuration?: number;
-  outputFormat?: ShotstackOutput['format'];
-  outputResolution?: ShotstackOutput['resolution'];
-  outputFps?: number;
   /** When provided, a caption track is added with the given style. */
   captions?: {
     transcription: WhisperTranscription;

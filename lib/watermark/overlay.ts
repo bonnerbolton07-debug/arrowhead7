@@ -10,7 +10,8 @@ import type {
   ShotstackTimeline,
   ShotstackTrack,
 } from '@/types/edit';
-import { requiresWatermark, type SubscriptionTier } from '@/lib/stripe/gating';
+import { requiresWatermark } from '@/lib/stripe/gating';
+import type { SubscriptionTier } from '@/types';
 
 export const WATERMARK_TEXT = 'Made with A7';
 

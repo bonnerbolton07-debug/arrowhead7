@@ -11,7 +11,7 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     include: ['**/*.test.ts', '**/*.test.tsx'],
-    exclude: ['node_modules', '.next', 'dist'],
+    exclude: ['**/node_modules/**', '.next/**', 'dist/**', '.claude/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
