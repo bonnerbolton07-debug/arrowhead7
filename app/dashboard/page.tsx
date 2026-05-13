@@ -1,6 +1,8 @@
 import { DashboardShell } from '@/components/dashboard/DashboardShell';
 import { getUser, createServerSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/server';
 import { PlusIcon, DnaIcon, FilmIcon, BoltIcon } from '@/components/ui/icons';
+import { RecommendedForYou } from '@/components/strategy/RecommendedForYou';
+import { getUserTier } from '@/lib/strategy-brain/gating';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +34,7 @@ export default async function DashboardPage() {
   const user = await getUser();
   const supabaseReady = isSupabaseConfigured();
   const recents = user ? await getRecentEdits(user.id) : [];
+  const access = await getUserTier();
 
   return (
     <DashboardShell
@@ -80,6 +83,10 @@ export default async function DashboardPage() {
             Icon={FilmIcon}
             accent="teal"
           />
+        </div>
+
+        <div className="mb-12">
+          <RecommendedForYou unlocked={access?.unlocked ?? false} />
         </div>
 
         <div className="flex items-center justify-between mb-4">
