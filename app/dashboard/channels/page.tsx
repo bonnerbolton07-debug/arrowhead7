@@ -53,6 +53,22 @@ interface SearchParams {
   error?: string;
 }
 
+const ERROR_MAP: Record<string, string> = {
+  access_denied: 'You denied access. No connection was made.',
+  invalid_state: 'Session expired. Please try again.',
+};
+
+const CONNECTED_PROVIDERS = new Set([
+  'youtube',
+  'tiktok',
+  'instagram',
+  'x',
+  'twitter',
+  'linkedin',
+  'google_drive',
+  'dropbox',
+]);
+
 const PLATFORMS: {
   id: Platform;
   name: string;
@@ -190,6 +206,13 @@ export default async function ChannelsPage({
     if (!user) redirect('/auth/login?next=/dashboard/channels');
   }
 
+  const connectedLabel = sp.connected && CONNECTED_PROVIDERS.has(sp.connected)
+    ? sp.connected.replace(/_/g, ' ')
+    : null;
+  const errorMsg = sp.error
+    ? (ERROR_MAP[sp.error] ?? 'Connection failed. Please try again.')
+    : null;
+
   const { tier, channels, distributions, clouds } = await fetchData();
   const limit = TIER_LIMITS[tier].max_channels;
   const atLimit = limit !== -1 && channels.length >= limit;
@@ -204,7 +227,7 @@ export default async function ChannelsPage({
     >
       <div className="max-w-6xl space-y-10">
         {/* Connection feedback */}
-        {sp.connected && (
+        {connectedLabel && (
           <div
             className="px-4 py-3 rounded-md text-sm"
             style={{
@@ -214,10 +237,10 @@ export default async function ChannelsPage({
               color: '#5BE8D5',
             }}
           >
-            Connected {sp.connected.replace(/_/g, ' ')} successfully.
+            Connected {connectedLabel} successfully.
           </div>
         )}
-        {sp.error && (
+        {errorMsg && (
           <div
             className="px-4 py-3 rounded-md text-sm"
             style={{
@@ -227,7 +250,7 @@ export default async function ChannelsPage({
               color: '#E8B06A',
             }}
           >
-            Connection failed: {sp.error}
+            {errorMsg}
           </div>
         )}
 
