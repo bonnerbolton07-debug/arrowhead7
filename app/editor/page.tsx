@@ -466,7 +466,7 @@ export default function EditorPage() {
         // Non-fatal — render route will still create what it needs.
       }
     } catch (err) {
-      setFootageError(friendlyUploadError(err, uploadStatus));
+      setFootageError(friendlyUploadError(err));
       setFootageUploadState('error');
     }
   }, [readyRefs]);
