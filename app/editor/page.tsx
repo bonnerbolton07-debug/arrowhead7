@@ -346,6 +346,8 @@ export default function EditorPage() {
         if (!cancelled) setAnalyzeStage(stages[stageIdx]);
       }, 1500);
 
+      const abortCtrl = new AbortController();
+      const fetchTimeout = setTimeout(() => abortCtrl.abort(), 55_000);
       try {
         // Weight each reference equally; videos drive temporal fields, images
         // contribute to color. (See analyzer.ts blendAnalyses for details.)
@@ -354,8 +356,10 @@ export default function EditorPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ references: payload }),
+          signal: abortCtrl.signal,
         });
         clearInterval(stageTimer);
+        clearTimeout(fetchTimeout);
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -368,8 +372,15 @@ export default function EditorPage() {
         setAnalyzeState('done');
       } catch (err) {
         clearInterval(stageTimer);
+        clearTimeout(fetchTimeout);
         if (cancelled) return;
-        setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed');
+        const msg =
+          err instanceof Error && err.name === 'AbortError'
+            ? 'Analysis timed out — try a shorter video or upload a clip under 60 seconds.'
+            : err instanceof Error
+              ? err.message
+              : 'Analysis failed';
+        setAnalyzeError(msg);
         setAnalyzeState('error');
       }
     };

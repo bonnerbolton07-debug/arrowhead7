@@ -58,7 +58,7 @@ export interface AnalyzeReferenceInput {
 export interface AnalyzeOptions {
   /**
    * Cap analysis to the first N seconds of the source. Useful in serverless
-   * runtimes that enforce wall-clock limits. Defaults to 90 — enough to capture
+   * runtimes that enforce wall-clock limits. Defaults to 30 — enough to capture
    * structure on short-form references without burning unbounded CPU.
    */
   maxAnalyzeSeconds?: number;
@@ -164,12 +164,33 @@ async function analyzeSingleReference(
     return analyzeImageReference(ref);
   }
 
+  // 50s overall deadline — prevents compounding FFmpeg timeouts from
+  // exceeding the Vercel function ceiling.
+  let deadlineHandle: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    deadlineHandle = setTimeout(
+      () => reject(new Error('Style DNA analysis timed out — try a shorter clip (under 60s)')),
+      50_000
+    );
+  });
+
+  try {
+    return await Promise.race([runSingleAnalysis(ref, options), deadline]);
+  } finally {
+    clearTimeout(deadlineHandle);
+  }
+}
+
+async function runSingleAnalysis(
+  ref: StyleReference,
+  options: AnalyzeOptions
+): Promise<SingleAnalysisResult> {
   const resolved = await resolveSource(ref.url);
   try {
     const metadata = await extractMetadata(resolved.path);
     const analyzeDuration = Math.min(
       metadata.duration,
-      options.maxAnalyzeSeconds ?? 90
+      options.maxAnalyzeSeconds ?? 30
     );
     const scenes = await detectScenes(
       resolved.path,

@@ -84,7 +84,17 @@ async function pathExists(p: string): Promise<boolean> {
 
 async function downloadToTmp(url: string, ext: string = 'mp4'): Promise<ResolvedSource> {
   const dest = path.join(tmpdir(), `${TMP_PREFIX}${randomUUID()}.${ext}`);
-  const res = await fetch(url);
+
+  // 30s to connect and receive response headers.
+  const fetchController = new AbortController();
+  const connectTimeout = setTimeout(() => fetchController.abort(), 30_000);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: fetchController.signal });
+  } finally {
+    clearTimeout(connectTimeout);
+  }
+
   if (!res.ok || !res.body) {
     throw new Error(`Failed to download source (${res.status})`);
   }
@@ -93,18 +103,32 @@ async function downloadToTmp(url: string, ext: string = 'mp4'): Promise<Resolved
   // 1GB ceiling — anything bigger is rejected to keep tmp predictable.
   const MAX = 1024 * 1024 * 1024;
   const reader = res.body.getReader();
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > MAX) {
-        throw new Error('Source exceeds 1GB ceiling for analysis');
+
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      // Race each chunk read against a 20s stall guard.
+      let stallHandle: ReturnType<typeof setTimeout> | undefined;
+      const stall = new Promise<never>((_, reject) => {
+        stallHandle = setTimeout(
+          () => reject(new Error('Source download stalled — no data received for 20s')),
+          20_000
+        );
+      });
+      const chunk = await Promise.race([reader.read(), stall]);
+      clearTimeout(stallHandle);
+
+      if (chunk.done) break;
+      if (chunk.value) {
+        total += chunk.value.byteLength;
+        if (total > MAX) throw new Error('Source exceeds 1GB ceiling for analysis');
+        chunks.push(chunk.value);
       }
-      chunks.push(value);
     }
+  } finally {
+    reader.cancel().catch(() => {});
   }
+
   const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
   await fs.writeFile(dest, buf);
   return { path: dest, ephemeral: true };
@@ -125,12 +149,18 @@ async function downloadSocial(url: string): Promise<ResolvedSource> {
   ];
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ytdlp, args, { stdio: 'ignore' });
-    child.on('error', (err) =>
-      reject(new Error(`Social URL fetch requires yt-dlp (not found: ${err.message}). Upload the file directly instead.`))
-    );
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error(`yt-dlp exited ${code} for ${url}`))
-    );
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Social URL download timed out after 30s — upload the file directly instead.'));
+    }, 30_000);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Social URL fetch requires yt-dlp (not found: ${err.message}). Upload the file directly instead.`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve() : reject(new Error(`yt-dlp exited ${code} for ${url}`));
+    });
   });
   if (!(await pathExists(dest))) {
     throw new Error('yt-dlp succeeded but produced no file');
