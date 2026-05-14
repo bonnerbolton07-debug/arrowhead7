@@ -119,11 +119,19 @@ async function createDistribution(
 
 async function markDistribution(
   distributionId: string,
+  userId: string,
   patch: Record<string, unknown>,
   client?: SupabaseClient
 ): Promise<void> {
   const supabase = await db(client);
-  await supabase.from('distributions').update(patch).eq('id', distributionId);
+  // Scope by user_id too — defence in depth so a stray id from another
+  // tenant can never overwrite this row, even if the caller passed the
+  // service-role client (which would otherwise bypass RLS).
+  await supabase
+    .from('distributions')
+    .update(patch)
+    .eq('id', distributionId)
+    .eq('user_id', userId);
 }
 
 export async function publishToChannel(opts: {
@@ -182,6 +190,7 @@ export async function publishToChannel(opts: {
   } else {
     await markDistribution(
       distributionId,
+      userId,
       { status: 'publishing', publish_attempts: 1 },
       client
     );
@@ -210,6 +219,7 @@ export async function publishToChannel(opts: {
         const url = `https://www.youtube.com/watch?v=${result.videoId}`;
         await markDistribution(
           distributionId,
+          userId,
           {
             status: 'published',
             published_at: new Date().toISOString(),
@@ -245,6 +255,7 @@ export async function publishToChannel(opts: {
         });
         await markDistribution(
           distributionId,
+          userId,
           {
             status: 'publishing',
             upload_id: publishId,
@@ -276,6 +287,7 @@ export async function publishToChannel(opts: {
         });
         await markDistribution(
           distributionId,
+          userId,
           {
             status: 'published',
             published_at: new Date().toISOString(),
@@ -307,6 +319,7 @@ export async function publishToChannel(opts: {
         });
         await markDistribution(
           distributionId,
+          userId,
           {
             status: 'published',
             published_at: new Date().toISOString(),
@@ -330,6 +343,7 @@ export async function publishToChannel(opts: {
     const msg = e instanceof Error ? e.message : 'publish_failed';
     await markDistribution(
       distributionId,
+      userId,
       { status: 'failed', last_error: msg },
       client
     );

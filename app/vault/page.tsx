@@ -34,6 +34,8 @@ async function fetchData(): Promise<VaultPageData> {
   if (!user) return empty;
 
   const supabase = await createServerSupabaseClient();
+  // cloud_connections is the only OAuth-backed storage table now; the legacy
+  // `storage_connections` shape was never deployed.
   const [profileRes, filesRes, cloudsRes] = await Promise.all([
     supabase
       .from('profiles')

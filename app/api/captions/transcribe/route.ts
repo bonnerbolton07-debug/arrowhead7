@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
+import { rateLimitResponse } from '@/lib/rate-limit';
 import {
   isWhisperConfigured,
   transcribeFromUrl,
@@ -30,11 +31,16 @@ function isValidR2Key(key: string): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  let userId: string;
   try {
-    await requireUser();
+    const user = await requireUser();
+    userId = user.id;
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const limited = rateLimitResponse('captions-transcribe', userId);
+  if (limited) return limited;
 
   if (!isWhisperConfigured()) {
     return NextResponse.json(

@@ -3,6 +3,20 @@
 -- =============================================================================
 -- Run this against your Supabase project to create the initial tables.
 -- Supabase handles auth.users automatically via their auth system.
+--
+-- Migration order:
+--   1. db/schema.sql                              (this file — base tables)
+--   2. db/migrations/001_cloud_connections.sql    (idempotent — superset of
+--                                                  the cloud_connections
+--                                                  table defined below)
+--   3. db/migrations/002_distributions_scheduling.sql  (idempotent — adds
+--                                                  publish_attempts /
+--                                                  last_error / upload_id;
+--                                                  already inlined here)
+--   4. db/migrations/003_strategy_brain.sql       (content_calendar,
+--                                                  content_performance,
+--                                                  trend_cache)
+-- Migrations are IF NOT EXISTS guarded and safe to re-run against this base.
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -188,6 +202,11 @@ CREATE TABLE public.distributions (
   platform_metadata JSONB,
   analytics JSONB,
 
+  -- Scheduling + retry telemetry (also enforced by migration 002 for live DBs).
+  publish_attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  upload_id TEXT,                    -- e.g. TikTok publish_id for async polling
+
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -224,28 +243,42 @@ CREATE TABLE public.subscriptions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ─── Storage Connections ───────────────────────────────────────────────────
--- Cloud-storage integrations (Google Drive, Dropbox, iCloud, etc.)
+-- ─── Cloud Connections ─────────────────────────────────────────────────────
+-- Cloud-storage integrations (Google Drive, Dropbox, OneDrive, Box).
+-- Authoritative definition lives in db/migrations/001_cloud_connections.sql
+-- — that migration is what was applied to production. This block exists so
+-- that a fresh `schema.sql` load matches the migrated state.
+--
+-- History: an earlier draft called this table `storage_connections` with a
+-- different shape. That table was never deployed; migration 001 introduced
+-- `cloud_connections` and every production code path queries that name.
 
-CREATE TABLE public.storage_connections (
+CREATE TABLE public.cloud_connections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('google_drive', 'dropbox', 'icloud', 'onedrive')),
+  provider TEXT NOT NULL CHECK (provider IN ('google_drive', 'dropbox', 'onedrive', 'box')),
+
+  account_id TEXT NOT NULL,
   account_email TEXT,
   account_name TEXT,
-  access_token_encrypted TEXT,
+  account_avatar_url TEXT,
+
+  -- App-level encrypted via AES-256-GCM (see lib/crypto/tokens.ts)
+  access_token_encrypted TEXT NOT NULL,
   refresh_token_encrypted TEXT,
   token_expires_at TIMESTAMPTZ,
   scopes TEXT[] NOT NULL DEFAULT '{}',
+
   connection_status TEXT NOT NULL DEFAULT 'connected' CHECK (connection_status IN (
     'connected', 'disconnected', 'expired', 'error'
   )),
-  storage_used_bytes BIGINT NOT NULL DEFAULT 0,
-  storage_quota_bytes BIGINT,
-  last_sync_at TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  metadata JSONB,
+
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(user_id, provider, account_email)
+
+  UNIQUE (user_id, provider, account_id)
 );
 
 -- ─── API Keys ───────────────────────────────────────────────────────────────
@@ -295,6 +328,10 @@ CREATE INDEX idx_channels_platform ON public.channels(platform);
 CREATE INDEX idx_distributions_edit_id ON public.distributions(edit_id);
 CREATE INDEX idx_distributions_channel_id ON public.distributions(channel_id);
 CREATE INDEX idx_distributions_status ON public.distributions(status);
+-- Used by the scheduler cron to cheaply find due rows.
+CREATE INDEX idx_distributions_scheduled_for
+  ON public.distributions (scheduled_for)
+  WHERE status = 'scheduled';
 
 CREATE INDEX idx_credit_transactions_user_id ON public.credit_transactions(user_id);
 CREATE INDEX idx_credit_transactions_created_at ON public.credit_transactions(created_at DESC);
@@ -302,7 +339,8 @@ CREATE INDEX idx_credit_transactions_created_at ON public.credit_transactions(cr
 CREATE INDEX idx_subscriptions_user_id ON public.subscriptions(user_id);
 CREATE INDEX idx_subscriptions_stripe_customer ON public.subscriptions(stripe_customer_id);
 
-CREATE INDEX idx_storage_connections_user_id ON public.storage_connections(user_id);
+CREATE INDEX idx_cloud_connections_user_id ON public.cloud_connections(user_id);
+CREATE INDEX idx_cloud_connections_provider ON public.cloud_connections(provider);
 
 CREATE INDEX idx_api_keys_user_id ON public.api_keys(user_id);
 CREATE INDEX idx_api_keys_prefix ON public.api_keys(prefix);
@@ -318,7 +356,7 @@ ALTER TABLE public.channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.distributions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.credit_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.storage_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cloud_connections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notification_preferences ENABLE ROW LEVEL SECURITY;
 
@@ -360,11 +398,11 @@ CREATE POLICY "Users can create own transactions" ON public.credit_transactions 
 -- Subscriptions: users can view their own
 CREATE POLICY "Users can view own subscription" ON public.subscriptions FOR SELECT USING (auth.uid() = user_id);
 
--- Storage connections: users can CRUD their own
-CREATE POLICY "Users view own storage connections" ON public.storage_connections FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Users insert own storage connections" ON public.storage_connections FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users update own storage connections" ON public.storage_connections FOR UPDATE USING (auth.uid() = user_id);
-CREATE POLICY "Users delete own storage connections" ON public.storage_connections FOR DELETE USING (auth.uid() = user_id);
+-- Cloud connections: users can CRUD their own
+CREATE POLICY "cloud_connections_select_own" ON public.cloud_connections FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "cloud_connections_insert_own" ON public.cloud_connections FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "cloud_connections_update_own" ON public.cloud_connections FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "cloud_connections_delete_own" ON public.cloud_connections FOR DELETE USING (auth.uid() = user_id);
 
 -- API keys: users can manage their own
 CREATE POLICY "Users view own api keys" ON public.api_keys FOR SELECT USING (auth.uid() = user_id);
@@ -406,6 +444,9 @@ CREATE TRIGGER update_distributions_updated_at BEFORE UPDATE ON public.distribut
 CREATE TRIGGER update_subscriptions_updated_at BEFORE UPDATE ON public.subscriptions
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE TRIGGER update_cloud_connections_updated_at BEFORE UPDATE ON public.cloud_connections
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 -- Auto-create profile on user signup
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
@@ -440,6 +481,12 @@ BEGIN
 END;
 $$;
 
+-- NOTE: refund_credit is intentionally scoped to the calling user via
+-- auth.uid(). It is safe and correct for *user-context* refunds (e.g. the
+-- render route refunding a credit on its own user's behalf), but it WILL
+-- raise `unauthorized` from cron / admin paths where auth.uid() is null.
+-- Admin / cron refunds must use a direct UPDATE on public.profiles with
+-- the service-role client instead of calling this RPC.
 CREATE OR REPLACE FUNCTION public.refund_credit(p_user_id uuid, p_amount int)
 RETURNS TABLE(credits_remaining int, credits_used_total int)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
