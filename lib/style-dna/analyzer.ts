@@ -149,6 +149,12 @@ interface SingleAnalysisResult {
   rawCuts: number[];
 }
 
+/** Per-reference wall-clock cap. The route-level Promise.race fires at 60s but
+ *  doesn't kill in-flight ffmpeg children — we want each reference to fall
+ *  back to the heuristic well before the route gives up. 40s leaves headroom
+ *  for the route to still respond cleanly if blending takes a moment. */
+const PER_REFERENCE_TIMEOUT_MS = 40_000;
+
 async function analyzeSingleReference(
   ref: StyleReference,
   options: AnalyzeOptions
@@ -161,9 +167,11 @@ async function analyzeSingleReference(
     return heuristicFallback(ref);
   }
 
-  // Wrap the full pipeline — if anything fails (binary crash, download
-  // timeout, OOM, ffprobe ENOENT, etc.) degrade gracefully to heuristic
-  // so the user always gets a result instead of a 500 error.
+  // Race the full pipeline against a per-reference wall clock. If anything
+  // hangs (DNS stall on a presigned URL, ffmpeg stuck on a malformed atom,
+  // background download taking too long) we resolve with the heuristic
+  // before the route-level timer can ever fire.
+  const pipeline = (async () => {
   try {
   if (ref.type === 'image') {
     return await analyzeImageReference(ref);
@@ -221,6 +229,21 @@ async function analyzeSingleReference(
   } catch (pipelineErr) {
     console.warn('[style-dna] Pipeline failed, using heuristic:', pipelineErr instanceof Error ? pipelineErr.message : pipelineErr);
     return heuristicFallback(ref);
+  }
+  })();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutFallback = new Promise<SingleAnalysisResult>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[style-dna] Reference exceeded ${PER_REFERENCE_TIMEOUT_MS}ms, falling back to heuristic`);
+      resolve(heuristicFallback(ref));
+    }, PER_REFERENCE_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([pipeline, timeoutFallback]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

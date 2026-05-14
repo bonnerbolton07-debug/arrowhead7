@@ -113,6 +113,7 @@ export default function EditorPage() {
   const [styleDNA, setStyleDNA] = useState<AnalyzedStyleDNA | null>(null);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analyzeStage, setAnalyzeStage] = useState<string>('');
+  const [analyzeElapsed, setAnalyzeElapsed] = useState<number>(0);
 
   // Step 4 — Configure
   const [resolution, setResolution] = useState<Resolution>('1080');
@@ -326,6 +327,11 @@ export default function EditorPage() {
     if (readyRefs.length === 0) return;
 
     let cancelled = false;
+    const startedAt = Date.now();
+    setAnalyzeElapsed(0);
+    const elapsedTimer = setInterval(() => {
+      if (!cancelled) setAnalyzeElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
     const run = async () => {
       setAnalyzeState('analyzing');
       setAnalyzeError(null);
@@ -351,7 +357,10 @@ export default function EditorPage() {
         // contribute to color. (See analyzer.ts blendAnalyses for details.)
         const payload = readyRefs.map((r) => ({ url: r.url, type: r.kind }));
         const controller = new AbortController();
-        const fetchTimeout = setTimeout(() => controller.abort(), 70_000);
+        // Server has a 60s hard cap plus a 40s per-reference fallback, so 75s
+        // on the client should always outlive the server response. If we hit
+        // this timeout, something is wedged at the network layer.
+        const fetchTimeout = setTimeout(() => controller.abort(), 75_000);
         let res: Response;
         try {
           res = await fetch('/api/style-dna/analyze', {
@@ -359,6 +368,9 @@ export default function EditorPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ references: payload }),
             signal: controller.signal,
+            // Keep the request alive even if the page is backgrounded briefly
+            // on mobile (Safari aggressively pauses inactive tabs).
+            keepalive: false,
           });
         } catch (fetchErr: unknown) {
           clearTimeout(fetchTimeout);
@@ -369,6 +381,7 @@ export default function EditorPage() {
         }
         clearTimeout(fetchTimeout);
         clearInterval(stageTimer);
+        clearInterval(elapsedTimer);
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -381,6 +394,7 @@ export default function EditorPage() {
         setAnalyzeState('done');
       } catch (err) {
         clearInterval(stageTimer);
+        clearInterval(elapsedTimer);
         if (cancelled) return;
         setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed');
         setAnalyzeState('error');
@@ -389,6 +403,7 @@ export default function EditorPage() {
     void run();
     return () => {
       cancelled = true;
+      clearInterval(elapsedTimer);
     };
   }, [step, analyzeState, readyRefs]);
 
@@ -591,57 +606,78 @@ export default function EditorPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-a7-base to-a7-void flex flex-col">
+    <div className="min-h-screen bg-gradient-to-b from-a7-base to-a7-void flex flex-col overflow-x-hidden">
       <div
         className="fixed inset-0 pointer-events-none"
         style={{ background: 'radial-gradient(ellipse at 50% 30%, rgba(45,212,191,0.03) 0%, transparent 50%)' }}
       />
 
-      <header className="relative flex items-center justify-between px-6 py-4 border-b border-a7-text/[0.04]">
+      <header className="relative border-b border-a7-text/[0.04]">
         <div
-          className="absolute bottom-0 left-6 right-6 h-px"
+          className="absolute bottom-0 left-4 right-4 sm:left-6 sm:right-6 h-px"
           style={{ background: 'linear-gradient(90deg, transparent, rgba(45,212,191,0.12), rgba(184,115,51,0.08), transparent)' }}
         />
-        <div className="flex items-center gap-4">
-          <a href="/dashboard" className="flex items-center gap-3 text-a7-text/40 hover:text-a7-text text-sm transition-colors">
-            <LogoIcon size={24} variant="dual" />
-            <span>&larr; Dashboard</span>
+        {/* Top row: dashboard link + title + edit id. Stacks tight on mobile,
+            spreads out on larger screens. */}
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 pt-3 sm:pt-4 pb-2 sm:pb-3">
+          <a
+            href="/dashboard"
+            className="flex items-center gap-2 sm:gap-3 text-a7-text/40 hover:text-a7-text text-xs sm:text-sm transition-colors min-w-0"
+          >
+            <LogoIcon size={22} variant="dual" />
+            <span className="hidden xs:inline truncate">&larr; Dashboard</span>
           </a>
-          <span className="text-a7-text/10">|</span>
-          <span className="font-medium text-a7-text">New Edit</span>
+          <span className="font-medium text-a7-text text-sm sm:text-base truncate">New Edit</span>
+          <span className="text-[10px] sm:text-sm text-a7-text/40 truncate text-right max-w-[40%]">
+            {editId ? `Edit ${editId.slice(0, 8)}` : ''}
+          </span>
         </div>
-
-        <div className="flex items-center gap-3">
-          {STEPS.map((s, i) => (
-            <div key={s.id} className="flex items-center gap-2">
-              <div
-                className="w-2 h-2 rounded-full transition-all"
-                style={
-                  step === s.id
-                    ? { background: 'linear-gradient(135deg, #2DD4BF, #5BE8D5)', boxShadow: '0 0 8px rgba(45,212,191,0.5)' }
-                    : i < stepIndex
-                    ? { background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }
-                    : { background: 'rgba(245,240,232,0.1)' }
-                }
-              />
-              <span className={`text-xs ${step === s.id ? 'text-a7-text' : 'text-a7-text/20'}`}>
-                {s.label}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div className="text-sm text-a7-text/40 w-[140px] text-right">
-          {editId ? `Edit ${editId.slice(0, 8)}` : ''}
-        </div>
+        {/* Stepper row: horizontal scroll on small screens, shows dots+labels
+            on sm+ and dots+full labels on md+. Always fits the viewport. */}
+        <nav
+          aria-label="Edit progress"
+          className="px-3 sm:px-6 pb-3 sm:pb-4 overflow-x-auto no-scrollbar"
+        >
+          <ol className="flex items-center gap-2 sm:gap-3 min-w-max mx-auto justify-center w-fit">
+            {STEPS.map((s, i) => {
+              const isActive = step === s.id;
+              const isDone = i < stepIndex;
+              return (
+                <li key={s.id} className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <span
+                    className="w-2 h-2 rounded-full transition-all shrink-0"
+                    style={
+                      isActive
+                        ? { background: 'linear-gradient(135deg, #2DD4BF, #5BE8D5)', boxShadow: '0 0 8px rgba(45,212,191,0.5)' }
+                        : isDone
+                        ? { background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }
+                        : { background: 'rgba(245,240,232,0.1)' }
+                    }
+                  />
+                  <span
+                    className={`text-[10px] sm:text-xs whitespace-nowrap ${isActive ? 'text-a7-text' : 'text-a7-text/30'}`}
+                  >
+                    {s.label}
+                  </span>
+                  {i < STEPS.length - 1 && (
+                    <span
+                      className="ml-1 sm:ml-2 h-px w-4 sm:w-6 shrink-0"
+                      style={{ background: isDone ? 'rgba(45,212,191,0.4)' : 'rgba(245,240,232,0.08)' }}
+                    />
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-8 relative z-10">
+      <main className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 md:px-8 py-6 sm:py-8 relative z-10 w-full">
         {strategyBrief && <EditorStrategyBanner brief={strategyBrief} />}
         {step === 'reference' && (
           <div className="w-full max-w-2xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Add Your References</h2>
-            <p className="text-a7-text/40 text-sm mb-8 text-center">
+            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Add Your References</h2>
+            <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
               Drop in 3&ndash;4 reference videos and a couple mood-board images. A7 blends them into one Style DNA.
             </p>
 
@@ -716,8 +752,8 @@ export default function EditorPage() {
 
         {step === 'footage' && (
           <div className="w-full max-w-xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Upload Your Footage</h2>
-            <p className="text-a7-text/40 text-sm mb-8 text-center">
+            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Upload Your Footage</h2>
+            <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
               Drop in the raw video you want edited.
             </p>
 
@@ -739,10 +775,10 @@ export default function EditorPage() {
 
         {step === 'style' && (
           <div className="w-full max-w-2xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">
+            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">
               {analyzeState === 'done' ? 'Style DNA Captured' : 'Analyzing Style DNA'}
             </h2>
-            <p className="text-a7-text/40 text-sm mb-8 text-center">
+            <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
               {analyzeState === 'done'
                 ? 'Editing fingerprint ready. Review or adjust below.'
                 : 'Extracting the editing fingerprint from your reference.'}
@@ -761,7 +797,12 @@ export default function EditorPage() {
                   <div
                     className="h-2 rounded-full transition-all shimmer"
                     style={{
-                      width: analyzeState === 'analyzing' ? '70%' : analyzeState === 'error' ? '100%' : '0%',
+                      // Real elapsed-time progress: ramps from 5% to 95% over
+                      // ~45s so the bar visibly moves while the server works.
+                      // Clamped so it never reaches 100% before completion.
+                      width: analyzeState === 'analyzing'
+                        ? `${Math.min(95, 5 + (analyzeElapsed / 45) * 90)}%`
+                        : analyzeState === 'error' ? '100%' : '0%',
                       background: analyzeState === 'error'
                         ? 'linear-gradient(135deg, #E8B06A, #B87333)'
                         : 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
@@ -769,11 +810,16 @@ export default function EditorPage() {
                     }}
                   />
                 </div>
-                <p className="text-a7-text/40 text-xs text-center">
+                <p className="text-a7-text/40 text-xs text-center break-words px-2">
                   {analyzeState === 'error'
                     ? `Analysis failed: ${analyzeError ?? 'unknown error'}`
                     : analyzeStage || 'Working...'}
                 </p>
+                {analyzeState === 'analyzing' && (
+                  <p className="text-a7-text/25 text-[10px] text-center mt-1">
+                    {analyzeElapsed}s elapsed · auto-falls back at 40s
+                  </p>
+                )}
 
                 {analyzeState === 'error' && (
                   <div className="mt-4 flex justify-center">
@@ -799,8 +845,8 @@ export default function EditorPage() {
 
         {step === 'configure' && (
           <div className="w-full max-w-xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Render Settings</h2>
-            <p className="text-a7-text/40 text-sm mb-8 text-center">
+            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Render Settings</h2>
+            <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
               Tune output and storytelling. Style DNA already shapes the cut.
             </p>
 
@@ -1145,7 +1191,7 @@ function DropZone({
         const f = e.dataTransfer.files?.[0];
         if (f) onFile(f);
       }}
-      className="relative overflow-hidden block border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all hover:scale-[1.005]"
+      className="relative overflow-hidden block border-2 border-dashed rounded-xl p-6 sm:p-10 md:p-12 text-center cursor-pointer transition-all hover:scale-[1.005]"
       style={{
         borderColor: dragging ? 'rgba(45,212,191,0.4)' : 'rgba(45,212,191,0.15)',
         background: 'linear-gradient(135deg, rgba(45,212,191,0.03), rgba(45,212,191,0.005))',
@@ -1165,7 +1211,7 @@ function DropZone({
           if (f) onFile(f);
         }}
       />
-      <svg viewBox="0 0 32 32" width="48" height="48" className="mx-auto mb-4">
+      <svg viewBox="0 0 32 32" width="40" height="40" className="mx-auto mb-3 sm:mb-4 sm:w-12 sm:h-12">
         <defs>
           <linearGradient id="dz-upload-grad" x1="0%" y1="100%" x2="0%" y2="0%">
             <stop offset="0%" stopColor="rgba(45,212,191,0.1)" />
@@ -1248,7 +1294,7 @@ function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
         const files = Array.from(e.dataTransfer.files || []);
         if (files.length) onFiles(files);
       }}
-      className="relative overflow-hidden block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all hover:scale-[1.005]"
+      className="relative overflow-hidden block border-2 border-dashed rounded-xl p-6 sm:p-8 md:p-10 text-center cursor-pointer transition-all hover:scale-[1.005]"
       style={{
         borderColor: dragging ? 'rgba(45,212,191,0.4)' : 'rgba(45,212,191,0.15)',
         background: 'linear-gradient(135deg, rgba(45,212,191,0.03), rgba(45,212,191,0.005))',
@@ -1270,7 +1316,7 @@ function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
           if (inputRef.current) inputRef.current.value = '';
         }}
       />
-      <svg viewBox="0 0 32 32" width="40" height="40" className="mx-auto mb-3">
+      <svg viewBox="0 0 32 32" width="36" height="36" className="mx-auto mb-2 sm:mb-3 sm:w-10 sm:h-10">
         <defs>
           <linearGradient id="multi-drop-grad" x1="0%" y1="100%" x2="0%" y2="0%">
             <stop offset="0%" stopColor="rgba(45,212,191,0.1)" />
@@ -1308,14 +1354,14 @@ function ReferenceRow({
 
   return (
     <div
-      className="flex items-center gap-3 p-2 rounded-md"
+      className="flex items-center gap-2 sm:gap-3 p-2 rounded-md min-w-0"
       style={{
         background: 'linear-gradient(135deg, rgba(245,240,232,0.025), rgba(245,240,232,0.005))',
         border: '1px solid rgba(245,240,232,0.06)',
       }}
     >
       <div
-        className="w-16 h-16 rounded overflow-hidden flex items-center justify-center shrink-0"
+        className="w-12 h-12 sm:w-16 sm:h-16 rounded overflow-hidden flex items-center justify-center shrink-0"
         style={{
           background: 'linear-gradient(135deg, #10100E, #0C0C0A)',
           border: '1px solid rgba(45,212,191,0.08)',
@@ -1443,7 +1489,7 @@ function Segmented<T extends string>({
 }) {
   return (
     <div
-      className="inline-flex rounded-md p-1 gap-1"
+      className="flex flex-wrap rounded-md p-1 gap-1 max-w-full"
       style={{
         background: 'linear-gradient(180deg, #10100E, #0C0C0A)',
         border: '1px solid rgba(245,240,232,0.04)',
@@ -1455,7 +1501,7 @@ function Segmented<T extends string>({
           <button
             key={o.value}
             onClick={() => onChange(o.value)}
-            className={`px-4 py-2 rounded text-sm font-medium transition-all ${active ? 'text-a7-void' : 'text-a7-text/50 hover:text-a7-text'}`}
+            className={`flex-1 min-w-0 px-3 sm:px-4 py-2 rounded text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${active ? 'text-a7-void' : 'text-a7-text/50 hover:text-a7-text'}`}
             style={
               active
                 ? {

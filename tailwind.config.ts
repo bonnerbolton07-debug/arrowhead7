@@ -8,6 +8,12 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      screens: {
+        // Extra-small breakpoint for compact phones (sub-380px) where the
+        // default `sm:` (640px) leaves no room to differentiate from the
+        // tightest-grain layout.
+        xs: '380px',
+      },
       colors: {
         // Arrowhead 7 — OFFICIAL palette (Bonner.AI aligned, locked 2026-05-12)
         a7: {

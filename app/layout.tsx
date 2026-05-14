@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 
@@ -8,6 +8,14 @@ export const metadata: Metadata = {
   title: 'Arrowhead 7 — Autonomous Content Editing',
   description: 'AI-powered video editing platform. Upload footage, define your style, get broadcast-ready content.',
   keywords: ['video editing', 'AI editing', 'autonomous editing', 'content creation'],
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: 'cover',
+  themeColor: '#0C0C0A',
 };
 
 export default function RootLayout({

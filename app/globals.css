@@ -143,6 +143,31 @@ body {
   }
 }
 
+/* ─── Hide native scrollbars on horizontal scroll containers ─── */
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Tap targets should never be smaller than 44px on touch; honour it where
+     the design uses smaller pixel sizes but the affordance is still touch. */
+  .touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* Safe-area inset padding for notched devices (iPhone 17 Pro Max etc.). */
+  .pb-safe { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+  .pt-safe { padding-top: max(0.5rem, env(safe-area-inset-top)); }
+}
+
+/* iOS / Safari overflow guard: even with overflow-x-hidden on the root,
+   long inline strings (URLs, error text) can still force horizontal scroll.
+   Hard-cap the html/body so the viewport stays glued. */
+html, body { max-width: 100vw; overflow-x: clip; }
+
 /* ─── Shimmer animation (render progress) ─── */
 .shimmer {
   background: linear-gradient(90deg, transparent 0%, rgba(45,212,191,0.15) 50%, transparent 100%);
