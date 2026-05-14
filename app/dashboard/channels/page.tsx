@@ -16,6 +16,7 @@ import {
   CheckIcon,
   CloudIcon,
 } from '@/components/ui/icons';
+import { getRedirectUri } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,19 +104,25 @@ const PLATFORMS: {
   },
 ];
 
-const STORAGE_PROVIDERS: {
+interface StorageProvider {
   id: string;
-  dbProvider: 'google_drive' | 'dropbox';
+  dbProvider: 'google_drive' | 'dropbox' | 'icloud';
   name: string;
   description: string;
   envCheck: string[];
-}[] = [
+  // OAuth slug for /api/auth/<slug>/connect. Omitted when the provider uses
+  // a non-OAuth flow (e.g. iCloud's public share-link import lives on /vault).
+  connectMode: 'oauth' | 'share-link';
+}
+
+const STORAGE_PROVIDERS: StorageProvider[] = [
   {
     id: 'google-drive',
     dbProvider: 'google_drive',
     name: 'Google Drive',
     description: 'Import source footage from Drive into the Smart Vault.',
     envCheck: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+    connectMode: 'oauth',
   },
   {
     id: 'dropbox',
@@ -123,6 +130,16 @@ const STORAGE_PROVIDERS: {
     name: 'Dropbox',
     description: 'Browse and import video files from Dropbox.',
     envCheck: ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET'],
+    connectMode: 'oauth',
+  },
+  {
+    id: 'icloud',
+    dbProvider: 'icloud',
+    name: 'iCloud Drive',
+    description:
+      'Paste an iCloud share link from your Files app — no developer setup required.',
+    envCheck: [],
+    connectMode: 'share-link',
   },
 ];
 
@@ -217,19 +234,7 @@ export default async function ChannelsPage({
             Connected {sp.connected.replace(/_/g, ' ')} successfully.
           </div>
         )}
-        {sp.error && (
-          <div
-            className="px-4 py-3 rounded-md text-sm"
-            style={{
-              background:
-                'linear-gradient(135deg, rgba(212,148,74,0.08), rgba(212,148,74,0.02))',
-              border: '1px solid rgba(212,148,74,0.25)',
-              color: '#E8B06A',
-            }}
-          >
-            Connection failed: {sp.error}
-          </div>
-        )}
+        {sp.error && <OAuthErrorPanel error={sp.error} />}
 
         {/* Publishing Platforms */}
         <section>
@@ -461,12 +466,21 @@ function StorageCard({
     name: string;
     description: string;
     envCheck: string[];
+    connectMode: 'oauth' | 'share-link';
   };
   connected: boolean;
   accountLabel: string | null;
   ready: boolean;
 }) {
-  const connectHref = ready ? `/api/auth/${provider.id}/connect?next=/vault` : undefined;
+  // Share-link providers (iCloud) don't have a /api/auth route — the user
+  // pastes a share URL on the Vault page, which is also where reconnects
+  // happen. So the button always points at /vault for that mode.
+  const connectHref =
+    provider.connectMode === 'share-link'
+      ? '/vault'
+      : ready
+      ? `/api/auth/${provider.id}/connect?next=/vault`
+      : undefined;
   return (
     <div
       className="relative overflow-hidden rounded-lg p-5 flex items-start gap-4"
@@ -494,7 +508,7 @@ function StorageCard({
         {connected && accountLabel && (
           <p className="text-[10px] text-grad-copper font-mono mb-3">{accountLabel}</p>
         )}
-        {!ready && (
+        {!ready && provider.envCheck.length > 0 && (
           <p className="text-[10px] text-a7-text/30 font-mono mb-3">
             Set {provider.envCheck.join(' + ')} in env
           </p>
@@ -605,6 +619,59 @@ function DistributionHistory({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function OAuthErrorPanel({ error }: { error: string }) {
+  // Render redirect URIs inline whenever the error mentions a redirect mismatch,
+  // so the user can copy them straight into Google Cloud Console / Dropbox App
+  // Console without leaving the page.
+  const looksLikeRedirectMismatch = /redirect[_ ]?uri|redirect_uri_mismatch/i.test(error);
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? '(NEXT_PUBLIC_APP_URL not set)';
+  const slugs = ['google-drive', 'youtube', 'dropbox', 'instagram', 'tiktok', 'x'] as const;
+  return (
+    <div
+      className="px-4 py-3 rounded-md text-sm space-y-3"
+      style={{
+        background:
+          'linear-gradient(135deg, rgba(212,148,74,0.08), rgba(212,148,74,0.02))',
+        border: '1px solid rgba(212,148,74,0.25)',
+        color: '#E8B06A',
+      }}
+    >
+      <div>
+        <span className="font-semibold">Connection failed:</span>{' '}
+        <code className="font-mono text-xs">{error}</code>
+      </div>
+      {looksLikeRedirectMismatch && (
+        <div className="text-xs text-a7-text/70 space-y-2">
+          <p>
+            The provider rejected the redirect URI. Make sure the URI below is
+            registered <em>verbatim</em> in the provider&rsquo;s developer
+            console (no trailing slash, exact protocol, exact hostname).
+          </p>
+          <div className="rounded bg-a7-void/40 p-3 font-mono text-[11px] space-y-1">
+            <div className="text-a7-text/40">
+              App URL: <span className="text-a7-text/80">{appUrl}</span>
+            </div>
+            {slugs.map((s) => (
+              <div key={s}>
+                <span className="text-a7-text/40">{s}: </span>
+                <span className="text-a7-text/90">{getRedirectUri(s)}</span>
+              </div>
+            ))}
+          </div>
+          <p>
+            See <code>CONNECTORS_SETUP.md</code>, or hit{' '}
+            <a href="/api/auth/diagnostic" className="underline">
+              /api/auth/diagnostic
+            </a>{' '}
+            for the JSON view (no login required).
+          </p>
+        </div>
+      )}
     </div>
   );
 }
