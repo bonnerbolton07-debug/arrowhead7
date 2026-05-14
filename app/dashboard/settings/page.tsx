@@ -96,7 +96,7 @@ async function loadData(searchParams: Record<string, string | undefined>) {
       .select('platform, platform_account_name, connection_status')
       .eq('user_id', user.id),
     supabase
-      .from('storage_connections')
+      .from('cloud_connections')
       .select('provider, account_name, connection_status')
       .eq('user_id', user.id),
   ]);

@@ -75,15 +75,10 @@ async function fetchData(): Promise<{
     return { tier: 'free', connections: [], vaultUsedBytes: 0, browserConnected: {} };
 
   const supabase = await createServerSupabaseClient();
-  const [profileRes, legacyRes, cloudsRes] = await Promise.all([
+  const [profileRes, cloudsRes] = await Promise.all([
     supabase.from('profiles').select('subscription_tier').eq('id', user.id).single(),
-    supabase
-      .from('storage_connections')
-      .select(
-        'id, provider, account_email, account_name, connection_status, storage_used_bytes, storage_quota_bytes, last_sync_at, created_at'
-      )
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false }),
+    // cloud_connections is the only OAuth-backed storage table now; the
+    // legacy `storage_connections` shape was never deployed.
     supabase
       .from('cloud_connections')
       .select(
@@ -94,7 +89,6 @@ async function fetchData(): Promise<{
   ]);
 
   const tier = (profileRes.data?.subscription_tier as SubscriptionTier) ?? 'free';
-  const legacy = (legacyRes.data ?? []) as StorageRow[];
   const clouds = (cloudsRes.data ?? []) as Array<{
     id: string;
     provider: string;
@@ -104,26 +98,19 @@ async function fetchData(): Promise<{
     created_at: string;
   }>;
 
-  // Merge: cloud_connections (real OAuth) takes precedence per provider.
-  const byProvider = new Map<string, StorageRow>();
-  for (const row of legacy) byProvider.set(row.provider, row);
-  for (const c of clouds) {
-    byProvider.set(c.provider, {
-      id: c.id,
-      provider: c.provider as Provider,
-      account_email: c.account_email,
-      account_name: c.account_name,
-      connection_status: c.connection_status,
-      storage_used_bytes:
-        byProvider.get(c.provider)?.storage_used_bytes ?? 0,
-      storage_quota_bytes:
-        byProvider.get(c.provider)?.storage_quota_bytes ?? null,
-      last_sync_at: byProvider.get(c.provider)?.last_sync_at ?? null,
-      created_at: c.created_at,
-    });
-  }
-
-  const connections = Array.from(byProvider.values());
+  const connections: StorageRow[] = clouds.map((c) => ({
+    id: c.id,
+    provider: c.provider as Provider,
+    account_email: c.account_email,
+    account_name: c.account_name,
+    connection_status: c.connection_status,
+    // Per-provider byte counters aren't tracked on cloud_connections; the
+    // numbers come from the actual cloud API when the user browses.
+    storage_used_bytes: 0,
+    storage_quota_bytes: null,
+    last_sync_at: null,
+    created_at: c.created_at,
+  }));
   const vaultUsedBytes = connections.reduce(
     (sum, c) => sum + (c.storage_used_bytes ?? 0),
     0
