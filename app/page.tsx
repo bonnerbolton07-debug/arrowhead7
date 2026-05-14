@@ -20,6 +20,7 @@ import {
   VaultMockup,
 } from '@/components/ui/PreviewMockups';
 import { PricingCards } from '@/components/pricing/PricingCards';
+import { LandingNav } from '@/components/landing/LandingNav';
 
 export default function LandingPage() {
   return (
@@ -33,7 +34,7 @@ export default function LandingPage() {
         }}
       />
 
-      <Nav />
+      <LandingNav />
 
       <main className="relative z-10">
         <Hero />
@@ -52,63 +53,6 @@ export default function LandingPage() {
 
       <Footer />
     </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────────────── */
-/*  NAV                                                                        */
-/* ─────────────────────────────────────────────────────────────────────────── */
-
-function Nav() {
-  return (
-    <nav
-      className="sticky top-0 z-40 backdrop-blur-md"
-      style={{
-        background: 'rgba(10,10,10,0.7)',
-        borderBottom: '1px solid rgba(245,240,232,0.04)',
-      }}
-    >
-      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-a7-teal/15 to-transparent" />
-      <div className="max-w-7xl mx-auto flex items-center justify-between px-6 sm:px-8 py-4">
-        <a href="/" className="flex items-center gap-1">
-          <Logo variant="dual" size="sm" wordmark />
-        </a>
-
-        <div className="hidden md:flex items-center gap-7 text-sm">
-          <a href="#features" className="text-a7-text/50 hover:text-a7-text transition-colors">
-            Features
-          </a>
-          <a href="#how-it-works" className="text-a7-text/50 hover:text-a7-text transition-colors">
-            How it works
-          </a>
-          <a href="#use-cases" className="text-a7-text/50 hover:text-a7-text transition-colors">
-            Use cases
-          </a>
-          <a href="/pricing" className="text-a7-text/50 hover:text-a7-text transition-colors">
-            Pricing
-          </a>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <a
-            href="/auth/login"
-            className="hidden sm:inline text-sm text-a7-text/60 hover:text-a7-text transition-colors px-3 py-2"
-          >
-            Sign in
-          </a>
-          <a
-            href="/auth/signup"
-            className="text-sm px-4 py-2 rounded-md font-medium transition-all text-a7-void"
-            style={{
-              background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-              boxShadow: '0 0 20px rgba(45,212,191,0.25)',
-            }}
-          >
-            Get Started
-          </a>
-        </div>
-      </div>
-    </nav>
   );
 }
 
@@ -940,18 +884,14 @@ function Footer() {
     {
       title: 'Company',
       links: [
-        { label: 'About', href: '#' },
-        { label: 'Blog', href: '#' },
-        { label: 'Careers', href: '#' },
         { label: 'Contact', href: 'mailto:hello@bonner.ai' },
       ],
     },
     {
       title: 'Legal',
       links: [
-        { label: 'Terms', href: '#' },
-        { label: 'Privacy', href: '#' },
-        { label: 'Cookies', href: '#' },
+        { label: 'Terms', href: '/terms' },
+        { label: 'Privacy', href: '/privacy' },
       ],
     },
   ];
