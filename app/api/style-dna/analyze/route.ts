@@ -19,10 +19,11 @@ const Body = z.object({
   references: z.array(
     z.object({
       url: z.string().min(1),
+      type: z.enum(['video', 'image']).optional(),
       platform: z.enum(['instagram', 'tiktok', 'youtube', 'x', 'other']).optional(),
       weight: z.number().min(0).max(1).optional(),
     })
-  ).min(1).max(5),
+  ).min(1).max(10),
   options: z.object({
     maxAnalyzeSeconds: z.number().min(5).max(300).optional(),
     sceneThreshold: z.number().min(0.05).max(0.95).optional(),

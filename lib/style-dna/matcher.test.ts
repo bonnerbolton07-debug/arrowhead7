@@ -7,7 +7,7 @@ function makeStyleDNA(overrides: Partial<StyleDNA> = {}): StyleDNA {
     id: 'dna-1',
     user_id: 'user-1',
     name: 'Test Style',
-    references: [{ source_type: 'upload', url: 'r2://ref.mp4', weight: 1 }],
+    references: [{ source_type: 'upload', type: 'video', url: 'r2://ref.mp4', weight: 1 }],
     color_profile: {
       temperature: 0,
       saturation: 100,

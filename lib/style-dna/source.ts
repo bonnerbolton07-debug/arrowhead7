@@ -32,6 +32,14 @@ export function looksLikeR2Key(value: string): boolean {
   return /^(sources|processing|references)\//.test(value);
 }
 
+/** Best-effort: infer the file extension from an R2 key or URL path. */
+function extensionFor(reference: string): string {
+  const path = reference.split('?')[0].split('#')[0];
+  const m = path.match(/\.([a-zA-Z0-9]{1,5})$/);
+  if (m) return m[1].toLowerCase();
+  return 'mp4';
+}
+
 export function detectPlatform(value: string): 'instagram' | 'tiktok' | 'youtube' | 'x' | 'other' | null {
   if (!looksLikeUrl(value)) return null;
   if (/instagram\.com/.test(value)) return 'instagram';
@@ -46,16 +54,17 @@ export function detectPlatform(value: string): 'instagram' | 'tiktok' | 'youtube
  * Caller is responsible for cleaning up ephemeral files when done.
  */
 export async function resolveSource(reference: string): Promise<ResolvedSource> {
+  const ext = extensionFor(reference);
   if (looksLikeR2Key(reference)) {
     const url = await getPresignedDownloadUrl(reference, 3600);
-    return downloadToTmp(url);
+    return downloadToTmp(url, ext);
   }
   if (looksLikeUrl(reference)) {
     const platform = detectPlatform(reference);
     if (platform && platform !== 'other') {
       return downloadSocial(reference);
     }
-    return downloadToTmp(reference);
+    return downloadToTmp(reference, ext);
   }
   // Local path (test/dev)
   if (await pathExists(reference)) {
@@ -73,8 +82,8 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
-async function downloadToTmp(url: string): Promise<ResolvedSource> {
-  const dest = path.join(tmpdir(), `${TMP_PREFIX}${randomUUID()}.mp4`);
+async function downloadToTmp(url: string, ext: string = 'mp4'): Promise<ResolvedSource> {
+  const dest = path.join(tmpdir(), `${TMP_PREFIX}${randomUUID()}.${ext}`);
   const res = await fetch(url);
   if (!res.ok || !res.body) {
     throw new Error(`Failed to download source (${res.status})`);

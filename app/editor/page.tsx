@@ -34,7 +34,51 @@ type AnalyzedStyleDNA = Omit<StyleDNA, 'id' | 'created_at' | 'updated_at'>;
 type CaptionStyle = 'tiktok-bold' | 'youtube-bar' | 'karaoke';
 type CaptionState = 'idle' | 'transcribing' | 'done' | 'error' | 'unavailable';
 
-const ALLOWED_MIME = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
+type RefSource = 'upload' | 'url';
+type RefKind = 'video' | 'image';
+type RefStatus = 'uploading' | 'ready' | 'error';
+
+interface ReferenceItem {
+  id: string;
+  kind: RefKind;
+  source: RefSource;
+  /** R2 key for uploads, external URL for url-sourced references */
+  url: string;
+  /** Local preview URL for thumbnails (object URL for uploads) */
+  previewUrl?: string;
+  label: string;
+  status: RefStatus;
+  progress?: number;
+  error?: string;
+}
+
+const ALLOWED_VIDEO_MIME = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
+const ALLOWED_IMAGE_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'image/avif',
+]);
+const ALLOWED_MIME = new Set<string>([
+  ...Array.from(ALLOWED_VIDEO_MIME),
+  ...Array.from(ALLOWED_IMAGE_MIME),
+]);
+
+function makeId() {
+  return `ref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function inferKindFromMime(mime: string): RefKind {
+  return ALLOWED_IMAGE_MIME.has(mime) ? 'image' : 'video';
+}
+
+function inferKindFromUrl(url: string): RefKind {
+  const path = url.toLowerCase().split('?')[0];
+  return /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/.test(path) ? 'image' : 'video';
+}
 
 function classNames(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
@@ -44,12 +88,17 @@ export default function EditorPage() {
   const strategyBrief = useStrategyBrief();
   const [step, setStep] = useState<Step>('reference');
 
-  // Step 1 — Reference
-  const [referenceUrl, setReferenceUrl] = useState('');
-  const [referenceFile, setReferenceFile] = useState<File | null>(null);
-  const [referenceUploadState, setReferenceUploadState] = useState<UploadState>('idle');
-  const [referenceR2Key, setReferenceR2Key] = useState<string | null>(null);
+  // Step 1 — References (multiple videos and/or images)
+  const [references, setReferences] = useState<ReferenceItem[]>([]);
+  const [pendingUrl, setPendingUrl] = useState('');
   const [referenceError, setReferenceError] = useState<string | null>(null);
+
+  // Derived: do we have at least one ready reference?
+  const readyRefs = references.filter((r) => r.status === 'ready');
+  const hasReadyRef = readyRefs.length > 0;
+  // First soundtrack candidate: the highest-priority *video* reference uploaded
+  // to R2 (so we can shell it back to the soundtrack generator if requested).
+  const soundtrackR2Key = readyRefs.find((r) => r.kind === 'video' && r.source === 'upload')?.url ?? null;
 
   // Step 2 — Footage
   const [footageFile, setFootageFile] = useState<File | null>(null);
@@ -90,38 +139,127 @@ export default function EditorPage() {
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
-  // ─── Step 1: Reference Upload ───────────────────────────────────────────
-  const uploadReference = useCallback(async (file: File) => {
+  // ─── Step 1: Reference uploads / URL adds (multi-reference) ─────────────
+  const updateReference = useCallback((id: string, patch: Partial<ReferenceItem>) => {
+    setReferences((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }, []);
+
+  const removeReference = useCallback((id: string) => {
+    setReferences((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (target?.previewUrl && target.source === 'upload') {
+        try {
+          URL.revokeObjectURL(target.previewUrl);
+        } catch {
+          // ignore
+        }
+      }
+      return prev.filter((r) => r.id !== id);
+    });
+  }, []);
+
+  const moveReference = useCallback((id: string, delta: number) => {
+    setReferences((prev) => {
+      const idx = prev.findIndex((r) => r.id === id);
+      if (idx < 0) return prev;
+      const target = idx + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(idx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  }, []);
+
+  const uploadReferenceFile = useCallback(async (file: File) => {
     if (!ALLOWED_MIME.has(file.type)) {
-      setReferenceError('Use MP4, MOV, AVI, or WebM.');
+      setReferenceError('Supported types: MP4/MOV/AVI/WebM or JPG/PNG/WebP/GIF/HEIC/AVIF.');
       return;
     }
-    setReferenceFile(file);
     setReferenceError(null);
-    setReferenceUploadState('uploading');
+
+    const kind = inferKindFromMime(file.type);
+    const id = makeId();
+    const previewUrl = URL.createObjectURL(file);
+    setReferences((prev) => [
+      ...prev,
+      {
+        id,
+        kind,
+        source: 'upload',
+        url: '',
+        previewUrl,
+        label: file.name,
+        status: 'uploading',
+        progress: 0,
+      },
+    ]);
+
     try {
       const presignRes = await fetch('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, contentType: file.type }),
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type,
+          kind: kind === 'image' ? 'reference-image' : 'reference-video',
+        }),
       });
-      if (!presignRes.ok) throw new Error('Failed to get presigned URL');
+      if (!presignRes.ok) {
+        const body = await presignRes.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to get presigned URL');
+      }
       const { uploadUrl, key } = await presignRes.json();
 
-      const put = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type },
-        body: file,
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', file.type);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            updateReference(id, { progress: Math.round((e.loaded / e.total) * 100) });
+          }
+        };
+        xhr.onload = () =>
+          xhr.status >= 200 && xhr.status < 300
+            ? resolve()
+            : reject(new Error(`Upload failed: ${xhr.status}`));
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.send(file);
       });
-      if (!put.ok) throw new Error('Reference upload failed');
 
-      setReferenceR2Key(key);
-      setReferenceUploadState('done');
+      updateReference(id, { status: 'ready', url: key, progress: 100 });
     } catch (err) {
-      setReferenceError(err instanceof Error ? err.message : 'Upload failed');
-      setReferenceUploadState('error');
+      updateReference(id, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Upload failed',
+      });
     }
-  }, []);
+  }, [updateReference]);
+
+  const addReferenceUrl = useCallback(() => {
+    const trimmed = pendingUrl.trim();
+    if (!trimmed) return;
+    try {
+      new URL(trimmed);
+    } catch {
+      setReferenceError('Enter a valid URL (https://...)');
+      return;
+    }
+    setReferenceError(null);
+    setReferences((prev) => [
+      ...prev,
+      {
+        id: makeId(),
+        kind: inferKindFromUrl(trimmed),
+        source: 'url',
+        url: trimmed,
+        label: trimmed,
+        status: 'ready',
+      },
+    ]);
+    setPendingUrl('');
+  }, [pendingUrl]);
 
   // ─── Step 2: Footage Upload ─────────────────────────────────────────────
   const uploadFootage = useCallback(async (file: File) => {
@@ -170,7 +308,7 @@ export default function EditorPage() {
             title: file.name.replace(/\.[^.]+$/, ''),
             status: 'draft',
             source_video_url: key,
-            reference_urls: referenceR2Key ? [referenceR2Key] : (referenceUrl ? [referenceUrl] : []),
+            reference_urls: readyRefs.map((r) => r.url),
           });
         }
       } catch {
@@ -180,23 +318,22 @@ export default function EditorPage() {
       setFootageError(err instanceof Error ? err.message : 'Upload failed');
       setFootageUploadState('error');
     }
-  }, [referenceR2Key, referenceUrl]);
+  }, [readyRefs]);
 
   // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
     if (step !== 'style' || analyzeState !== 'idle') return;
-    const reference = referenceR2Key || referenceUrl.trim();
-    if (!reference) return;
+    if (readyRefs.length === 0) return;
 
     let cancelled = false;
     const run = async () => {
       setAnalyzeState('analyzing');
       setAnalyzeError(null);
-      setAnalyzeStage('Resolving reference...');
-      // Animate stage labels so the user sees progress while the server works.
+      const baseStage = `Blending ${readyRefs.length} reference${readyRefs.length === 1 ? '' : 's'}...`;
+      setAnalyzeStage(baseStage);
       const stages = [
-        'Resolving reference...',
-        'Probing video metadata...',
+        baseStage,
+        'Probing media metadata...',
         'Detecting scene cuts...',
         'Extracting audio waveform...',
         'Estimating BPM and beats...',
@@ -210,12 +347,13 @@ export default function EditorPage() {
       }, 1500);
 
       try {
+        // Weight each reference equally; videos drive temporal fields, images
+        // contribute to color. (See analyzer.ts blendAnalyses for details.)
+        const payload = readyRefs.map((r) => ({ url: r.url, type: r.kind }));
         const res = await fetch('/api/style-dna/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            references: [{ url: reference }],
-          }),
+          body: JSON.stringify({ references: payload }),
         });
         clearInterval(stageTimer);
         if (cancelled) return;
@@ -239,7 +377,7 @@ export default function EditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [step, analyzeState, referenceR2Key, referenceUrl]);
+  }, [step, analyzeState, readyRefs]);
 
   // ─── Step 5: Render & poll ─────────────────────────────────────────────
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -252,6 +390,22 @@ export default function EditorPage() {
   }, []);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
+
+  // Release any object URLs held by reference rows when the page unmounts.
+  useEffect(() => {
+    return () => {
+      references.forEach((r) => {
+        if (r.previewUrl && r.source === 'upload') {
+          try {
+            URL.revokeObjectURL(r.previewUrl);
+          } catch {
+            // ignore
+          }
+        }
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const pollStatus = useCallback(async (jobId: string) => {
     try {
@@ -309,7 +463,7 @@ export default function EditorPage() {
             hookText: hookText.trim() || undefined,
             ctaText: ctaText.trim() || undefined,
             generateSoundtrack,
-            referenceSoundtrackKey: generateSoundtrack && referenceR2Key ? referenceR2Key : undefined,
+            referenceSoundtrackKey: generateSoundtrack && soundtrackR2Key ? soundtrackR2Key : undefined,
             captions: captionsPayload
               ? { transcription: captionsPayload, style: captionStyle }
               : undefined,
@@ -326,7 +480,7 @@ export default function EditorPage() {
       setMatchState('error');
       return { ok: false, error: msg };
     }
-  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, referenceR2Key, captionStyle]);
+  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, soundtrackR2Key, captionStyle]);
 
   const transcribeForCaptions = useCallback(async (): Promise<unknown | null> => {
     if (!autoCaptions || !footageR2Key) return null;
@@ -406,7 +560,7 @@ export default function EditorPage() {
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
     switch (step) {
-      case 'reference': return Boolean(referenceR2Key) || referenceUrl.trim().length > 0;
+      case 'reference': return hasReadyRef;
       case 'footage':   return footageUploadState === 'done';
       case 'style':     return analyzeState === 'done';
       case 'configure': return true;
@@ -472,17 +626,14 @@ export default function EditorPage() {
       <main className="flex-1 flex flex-col items-center justify-center p-8 relative z-10">
         {strategyBrief && <EditorStrategyBanner brief={strategyBrief} />}
         {step === 'reference' && (
-          <div className="w-full max-w-xl">
-            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Upload a Reference</h2>
+          <div className="w-full max-w-2xl">
+            <h2 className="text-xl font-bold mb-2 text-center text-a7-text">Add Your References</h2>
             <p className="text-a7-text/40 text-sm mb-8 text-center">
-              Drop a video that defines the editing style you want.
+              Drop in 3&ndash;4 reference videos and a couple mood-board images. A7 blends them into one Style DNA.
             </p>
 
-            <DropZone
-              accept="video/*"
-              file={referenceFile}
-              uploadState={referenceUploadState}
-              onFile={uploadReference}
+            <ReferenceDropZone
+              onFiles={(files) => files.forEach(uploadReferenceFile)}
             />
 
             <div className="my-6 flex items-center gap-3">
@@ -491,16 +642,59 @@ export default function EditorPage() {
               <span className="flex-1 h-px bg-a7-text/[0.06]" />
             </div>
 
-            <input
-              type="url"
-              value={referenceUrl}
-              onChange={(e) => setReferenceUrl(e.target.value)}
-              placeholder="https://www.instagram.com/reel/..."
-              className="w-full px-4 py-3 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal"
-            />
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={pendingUrl}
+                onChange={(e) => setPendingUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addReferenceUrl();
+                  }
+                }}
+                placeholder="https://www.instagram.com/reel/... or image URL"
+                className="flex-1 px-4 py-3 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal"
+              />
+              <button
+                type="button"
+                onClick={addReferenceUrl}
+                disabled={!pendingUrl.trim()}
+                className="px-4 py-3 rounded-md text-sm font-medium text-a7-void transition-all disabled:opacity-40"
+                style={{
+                  background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                  boxShadow: pendingUrl.trim() ? '0 0 14px rgba(45,212,191,0.25)' : 'none',
+                }}
+              >
+                Add
+              </button>
+            </div>
 
             {referenceError && (
               <p className="mt-3 text-sm" style={{ color: '#E8B06A' }}>{referenceError}</p>
+            )}
+
+            {references.length > 0 && (
+              <div className="mt-8">
+                <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-3">
+                  {references.length} reference{references.length === 1 ? '' : 's'}
+                  {readyRefs.length !== references.length &&
+                    ` · ${readyRefs.length} ready`}
+                </div>
+                <div className="space-y-2">
+                  {references.map((ref, idx) => (
+                    <ReferenceRow
+                      key={ref.id}
+                      item={ref}
+                      isFirst={idx === 0}
+                      isLast={idx === references.length - 1}
+                      onMoveUp={() => moveReference(ref.id, -1)}
+                      onMoveDown={() => moveReference(ref.id, 1)}
+                      onRemove={() => removeReference(ref.id)}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
 
             <NavButtons onNext={next} onBack={null} disabled={!canAdvance} nextLabel="Continue" />
@@ -1021,6 +1215,207 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
       <div className="text-xs text-a7-text/40 mb-2 uppercase tracking-wider">{label}</div>
       {children}
     </div>
+  );
+}
+
+function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  return (
+    <label
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        const files = Array.from(e.dataTransfer.files || []);
+        if (files.length) onFiles(files);
+      }}
+      className="relative overflow-hidden block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all hover:scale-[1.005]"
+      style={{
+        borderColor: dragging ? 'rgba(45,212,191,0.4)' : 'rgba(45,212,191,0.15)',
+        background: 'linear-gradient(135deg, rgba(45,212,191,0.03), rgba(45,212,191,0.005))',
+      }}
+    >
+      <div
+        className="absolute top-0 left-0 right-0 h-px"
+        style={{ background: 'linear-gradient(90deg, rgba(45,212,191,0.2), transparent)' }}
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/*,image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          if (files.length) onFiles(files);
+          if (inputRef.current) inputRef.current.value = '';
+        }}
+      />
+      <svg viewBox="0 0 32 32" width="40" height="40" className="mx-auto mb-3">
+        <defs>
+          <linearGradient id="multi-drop-grad" x1="0%" y1="100%" x2="0%" y2="0%">
+            <stop offset="0%" stopColor="rgba(45,212,191,0.1)" />
+            <stop offset="100%" stopColor="rgba(45,212,191,0.3)" />
+          </linearGradient>
+        </defs>
+        <line x1="16" y1="24" x2="16" y2="6" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" />
+        <polyline points="8,13 16,5 24,13" fill="none" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <line x1="6" y1="28" x2="26" y2="28" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+      <p className="text-a7-text/50 text-sm mb-1">Drop videos and images — or click to choose</p>
+      <p className="text-a7-text/20 text-xs">MP4/MOV/WebM up to 2GB · JPG/PNG/WebP/HEIC/AVIF</p>
+    </label>
+  );
+}
+
+function ReferenceRow({
+  item,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+}: {
+  item: ReferenceItem;
+  isFirst: boolean;
+  isLast: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRemove: () => void;
+}) {
+  const isReady = item.status === 'ready';
+  const isUploading = item.status === 'uploading';
+  const isError = item.status === 'error';
+
+  return (
+    <div
+      className="flex items-center gap-3 p-2 rounded-md"
+      style={{
+        background: 'linear-gradient(135deg, rgba(245,240,232,0.025), rgba(245,240,232,0.005))',
+        border: '1px solid rgba(245,240,232,0.06)',
+      }}
+    >
+      <div
+        className="w-16 h-16 rounded overflow-hidden flex items-center justify-center shrink-0"
+        style={{
+          background: 'linear-gradient(135deg, #10100E, #0C0C0A)',
+          border: '1px solid rgba(45,212,191,0.08)',
+        }}
+      >
+        {item.previewUrl && item.kind === 'image' && (
+          // Local object URL preview for uploaded images
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={item.previewUrl} alt={item.label} className="w-full h-full object-cover" />
+        )}
+        {item.previewUrl && item.kind === 'video' && (
+          <video
+            src={item.previewUrl}
+            muted
+            playsInline
+            preload="metadata"
+            className="w-full h-full object-cover"
+          />
+        )}
+        {!item.previewUrl && (
+          <span className="text-[10px] uppercase tracking-wider text-a7-text/40">
+            {item.kind === 'image' ? 'IMG' : 'VID'}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider"
+            style={{
+              background: item.kind === 'image' ? 'rgba(184,115,51,0.12)' : 'rgba(45,212,191,0.12)',
+              color: item.kind === 'image' ? '#D4944A' : '#5BE8D5',
+              border: `1px solid ${item.kind === 'image' ? 'rgba(184,115,51,0.25)' : 'rgba(45,212,191,0.25)'}`,
+            }}
+          >
+            {item.kind}
+          </span>
+          <span className="text-[10px] uppercase tracking-wider text-a7-text/30">
+            {item.source}
+          </span>
+          {isReady && <span className="text-[10px] text-grad-teal">ready</span>}
+          {isUploading && (
+            <span className="text-[10px] text-a7-text/40">
+              uploading {item.progress ?? 0}%
+            </span>
+          )}
+          {isError && (
+            <span className="text-[10px]" style={{ color: '#E8B06A' }}>
+              {item.error || 'error'}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-a7-text/70 truncate">{item.label}</div>
+        {isUploading && (
+          <div
+            className="mt-1 w-full h-1 rounded-full overflow-hidden"
+            style={{ background: 'rgba(245,240,232,0.06)' }}
+          >
+            <div
+              className="h-full transition-all"
+              style={{
+                width: `${Math.max(item.progress ?? 0, 5)}%`,
+                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 shrink-0">
+        <IconButton onClick={onMoveUp} disabled={isFirst} title="Move up">
+          &uarr;
+        </IconButton>
+        <IconButton onClick={onMoveDown} disabled={isLast} title="Move down">
+          &darr;
+        </IconButton>
+        <IconButton onClick={onRemove} title="Remove" danger>
+          &times;
+        </IconButton>
+      </div>
+    </div>
+  );
+}
+
+function IconButton({
+  children,
+  onClick,
+  disabled,
+  danger,
+  title,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="w-7 h-7 rounded flex items-center justify-center text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+      style={{
+        background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+        border: `1px solid ${danger ? 'rgba(232,176,106,0.2)' : 'rgba(245,240,232,0.08)'}`,
+        color: danger ? '#E8B06A' : 'rgba(245,240,232,0.6)',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
-import { getPresignedUploadUrl, generateSourceKey } from '@/lib/cloudflare/r2';
+import { getPresignedUploadUrl, generateSourceKey, generateReferenceImageKey } from '@/lib/cloudflare/r2';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function POST(request: NextRequest) {
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     const user = await requireUser();
 
     const body = await request.json();
-    const { filename, contentType, editId } = body;
+    const { filename, contentType, editId, kind } = body;
 
     if (!filename || !contentType) {
       return NextResponse.json(
@@ -22,17 +22,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate content type
-    const allowedTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'];
+    // Validate content type. The editor uploads both source/reference videos
+    // and mood-board reference images (kind === 'reference-image').
+    const allowedVideoTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'];
+    const allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif', 'image/avif'];
+    const isImage = kind === 'reference-image';
+    const allowedTypes = isImage ? allowedImageTypes : allowedVideoTypes;
     if (!allowedTypes.includes(contentType)) {
       return NextResponse.json(
-        { error: 'Unsupported video format. Use MP4, MOV, AVI, or WebM.' },
+        { error: isImage
+            ? 'Unsupported image format. Use JPG, PNG, WebP, GIF, HEIC, or AVIF.'
+            : 'Unsupported video format. Use MP4, MOV, AVI, or WebM.'
+        },
         { status: 400 }
       );
     }
 
     const id = editId || uuidv4();
-    const key = generateSourceKey(user.id, id, filename);
+    const key = isImage
+      ? generateReferenceImageKey(user.id, id, filename)
+      : generateSourceKey(user.id, id, filename);
     const uploadUrl = await getPresignedUploadUrl(key, contentType);
 
     return NextResponse.json({
