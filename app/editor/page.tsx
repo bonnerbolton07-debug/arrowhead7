@@ -10,6 +10,7 @@ import {
 } from '@/components/strategy/EditorStrategyBanner';
 import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
 import type { StrategyPlatform } from '@/types/strategy';
+import { uploadToR2, maybeCompressImage } from '@/lib/upload/client';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -172,14 +173,19 @@ export default function EditorPage() {
     });
   }, []);
 
-  const uploadReferenceFile = useCallback(async (file: File) => {
-    if (!ALLOWED_MIME.has(file.type)) {
+  const uploadReferenceFile = useCallback(async (rawFile: File) => {
+    if (!ALLOWED_MIME.has(rawFile.type)) {
       setReferenceError('Supported types: MP4/MOV/AVI/WebM or JPG/PNG/WebP/GIF/HEIC/AVIF.');
       return;
     }
     setReferenceError(null);
 
-    const kind = inferKindFromMime(file.type);
+    const kind = inferKindFromMime(rawFile.type);
+    // For mood-board images we compress client-side before upload — the
+    // original is often a multi-MB HEIC/PNG that Style DNA never needs at
+    // full resolution. Videos pass through; multipart handles the size.
+    const file = kind === 'image' ? await maybeCompressImage(rawFile) : rawFile;
+
     const id = makeId();
     const previewUrl = URL.createObjectURL(file);
     setReferences((prev) => [
@@ -197,38 +203,10 @@ export default function EditorPage() {
     ]);
 
     try {
-      const presignRes = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type,
-          kind: kind === 'image' ? 'reference-image' : 'reference-video',
-        }),
+      const { key } = await uploadToR2(file, {
+        kind: kind === 'image' ? 'reference-image' : 'source',
+        onProgress: (pct) => updateReference(id, { progress: pct }),
       });
-      if (!presignRes.ok) {
-        const body = await presignRes.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to get presigned URL');
-      }
-      const { uploadUrl, key } = await presignRes.json();
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', file.type);
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            updateReference(id, { progress: Math.round((e.loaded / e.total) * 100) });
-          }
-        };
-        xhr.onload = () =>
-          xhr.status >= 200 && xhr.status < 300
-            ? resolve()
-            : reject(new Error(`Upload failed: ${xhr.status}`));
-        xhr.onerror = () => reject(new Error('Network error'));
-        xhr.send(file);
-      });
-
       updateReference(id, { status: 'ready', url: key, progress: 100 });
     } catch (err) {
       updateReference(id, {
@@ -273,24 +251,9 @@ export default function EditorPage() {
     setFootageUploadState('uploading');
     setFootageProgress(0);
     try {
-      const presignRes = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, contentType: file.type }),
-      });
-      if (!presignRes.ok) throw new Error('Failed to get presigned URL');
-      const { uploadUrl, key, editId: newEditId } = await presignRes.json();
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', file.type);
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) setFootageProgress(Math.round((e.loaded / e.total) * 100));
-        };
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed: ${xhr.status}`)));
-        xhr.onerror = () => reject(new Error('Network error'));
-        xhr.send(file);
+      const { key, editId: newEditId } = await uploadToR2(file, {
+        kind: 'source',
+        onProgress: (pct) => setFootageProgress(pct),
       });
 
       setFootageR2Key(key);

@@ -4,7 +4,16 @@
 // Temporary processing storage for source videos and intermediate files.
 // Final outputs go to Cloudflare Stream, not R2.
 
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const R2_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID!;
@@ -128,6 +137,94 @@ export function generateReferenceImageKey(userId: string, editId: string, filena
   const ext = (filename.split('.').pop() || 'jpg').toLowerCase();
   const slug = Math.random().toString(36).slice(2, 10);
   return `references/${userId}/${editId}/${slug}.${ext}`;
+}
+
+// ─── Multipart upload (large files) ──────────────────────────────────────────
+// R2 implements the S3 multipart-upload API. For files larger than ~25MB we
+// split client-side into ~5MB parts and upload each part to its own presigned
+// URL in parallel — multiple TCP connections in flight is dramatically faster
+// than a single PUT, especially on mobile networks where each connection's
+// throughput is capped low.
+
+export interface MultipartCreateResult {
+  uploadId: string;
+  key: string;
+}
+
+/** Start a multipart upload and return the uploadId. */
+export async function createMultipartUpload(
+  key: string,
+  contentType: string
+): Promise<MultipartCreateResult> {
+  const client = getR2Client();
+  const result = await client.send(
+    new CreateMultipartUploadCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      ContentType: contentType,
+    })
+  );
+  if (!result.UploadId) throw new Error('R2 did not return an UploadId');
+  return { uploadId: result.UploadId, key };
+}
+
+/** Presign one UploadPart request so the client can PUT the chunk directly. */
+export async function getPresignedUploadPartUrl(
+  key: string,
+  uploadId: string,
+  partNumber: number,
+  expiresInSeconds = 3600
+): Promise<string> {
+  const client = getR2Client();
+  const command = new UploadPartCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    UploadId: uploadId,
+    PartNumber: partNumber,
+  });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
+}
+
+export interface CompletedPart {
+  partNumber: number;
+  etag: string;
+}
+
+/** Complete a multipart upload once every part has finished PUTing. */
+export async function completeMultipartUpload(
+  key: string,
+  uploadId: string,
+  parts: CompletedPart[]
+): Promise<void> {
+  const client = getR2Client();
+  await client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: parts
+          .slice()
+          .sort((a, b) => a.partNumber - b.partNumber)
+          .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
+      },
+    })
+  );
+}
+
+/** Abort a multipart upload — releases the partial parts. Best-effort. */
+export async function abortMultipartUpload(
+  key: string,
+  uploadId: string
+): Promise<void> {
+  const client = getR2Client();
+  await client.send(
+    new AbortMultipartUploadCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      UploadId: uploadId,
+    })
+  );
 }
 
 /**
