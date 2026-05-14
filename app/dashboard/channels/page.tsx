@@ -60,6 +60,7 @@ const PLATFORMS: {
   Icon: typeof YouTubeIcon;
   oauthSlug: string;
   envCheck: string[];
+  comingSoon?: boolean;
 }[] = [
   {
     id: 'youtube',
@@ -94,12 +95,16 @@ const PLATFORMS: {
     envCheck: ['X_CLIENT_ID'],
   },
   {
+    // LinkedIn: no /api/auth/linkedin/connect route exists yet, so we render
+    // the card but lock the connect button. Flip `comingSoon` to false once
+    // the OAuth flow lands.
     id: 'linkedin',
     name: 'LinkedIn',
     description: 'Professional posts',
     Icon: LinkedInIcon,
     oauthSlug: 'linkedin',
     envCheck: [],
+    comingSoon: true,
   },
 ];
 
@@ -349,6 +354,7 @@ function PlatformCard({
     Icon: typeof YouTubeIcon;
     oauthSlug: string;
     envCheck: string[];
+    comingSoon?: boolean;
   };
   connected: boolean;
   status?: string;
@@ -356,7 +362,9 @@ function PlatformCard({
   disabled: boolean;
   ready: boolean;
 }) {
-  const connectHref = ready ? `/api/auth/${platform.oauthSlug}/connect` : undefined;
+  const comingSoon = platform.comingSoon === true;
+  const connectHref =
+    !comingSoon && ready ? `/api/auth/${platform.oauthSlug}/connect` : undefined;
   return (
     <div
       className="relative overflow-hidden rounded-lg p-5 flex flex-col"
@@ -380,7 +388,7 @@ function PlatformCard({
       />
       <div className="flex items-start justify-between mb-4">
         <platform.Icon size={28} />
-        {connected && (
+        {connected ? (
           <span
             className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-mono px-2 py-0.5 rounded-full"
             style={{
@@ -392,7 +400,19 @@ function PlatformCard({
             <CheckIcon size={10} gradient="teal" />
             {status === 'connected' ? 'Connected' : status ?? 'Connected'}
           </span>
-        )}
+        ) : comingSoon ? (
+          <span
+            className="inline-flex items-center text-[10px] uppercase tracking-wider font-mono px-2 py-0.5 rounded-full"
+            style={{
+              background: 'rgba(212,148,74,0.08)',
+              color: '#D4944A',
+              border: '1px solid rgba(212,148,74,0.25)',
+            }}
+            title="OAuth flow not yet implemented"
+          >
+            Coming soon
+          </span>
+        ) : null}
       </div>
       <h3 className="font-semibold text-sm text-a7-text mb-1">{platform.name}</h3>
       <p className="text-xs text-a7-text/40 mb-4 flex-1">
@@ -406,7 +426,21 @@ function PlatformCard({
         </p>
       )}
 
-      {connectHref ? (
+      {comingSoon ? (
+        <button
+          disabled
+          className="w-full px-3 py-2 rounded-md text-xs font-medium opacity-50 cursor-not-allowed"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(212,148,74,0.08), rgba(212,148,74,0.02))',
+            border: '1px solid rgba(212,148,74,0.2)',
+            color: '#D4944A',
+          }}
+          title="Coming soon — LinkedIn distribution is not yet available"
+        >
+          Coming soon
+        </button>
+      ) : connectHref ? (
         <a
           href={disabled ? undefined : connectHref}
           aria-disabled={disabled}

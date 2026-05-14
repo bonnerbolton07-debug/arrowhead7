@@ -10,6 +10,8 @@ import {
 } from '@/components/strategy/EditorStrategyBanner';
 import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
 import type { StrategyPlatform } from '@/types/strategy';
+import type { SubscriptionTier } from '@/types';
+import { canUseResolution, normalizeTier } from '@/lib/stripe/gating';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -136,6 +138,43 @@ export default function EditorPage() {
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
+
+  // Subscription tier — drives feature gates like the 4K resolution option.
+  // Default to 'free' until we know better; the option is locked client-side
+  // for UX, but the render route is the source of truth on tier limits.
+  const [tier, setTier] = useState<SubscriptionTier>('free');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = getClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { data } = await supabase
+          .from('profiles')
+          .select('subscription_tier')
+          .eq('id', user.id)
+          .single();
+        if (cancelled) return;
+        setTier(normalizeTier(data?.subscription_tier as string | null | undefined));
+      } catch {
+        // Silently fall back to 'free' — gating is enforced server-side.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const canUse4K = canUseResolution(tier, '4k');
+
+  // If the user previously selected 4K and downgrades (or we re-detect a
+  // lower tier), drop them back to 1080 so the locked option doesn't stay
+  // chosen.
+  useEffect(() => {
+    if (resolution === '4k' && !canUse4K) setResolution('1080');
+  }, [resolution, canUse4K]);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
@@ -813,9 +852,29 @@ export default function EditorPage() {
                   { value: 'sd', label: 'SD' },
                   { value: 'hd', label: 'HD 720' },
                   { value: '1080', label: '1080p' },
-                  { value: '4k', label: '4K' },
+                  {
+                    value: '4k',
+                    label: '4K',
+                    disabled: !canUse4K,
+                    tooltip: canUse4K
+                      ? undefined
+                      : 'Upgrade to Pro or Studio to render at 4K.',
+                  },
                 ]}
               />
+              {!canUse4K && (
+                <p className="mt-2 text-[11px] text-a7-text/40">
+                  4K renders are part of the{' '}
+                  <a
+                    href="/pricing"
+                    className="font-medium hover:underline"
+                    style={{ color: '#D4944A' }}
+                  >
+                    Pro &amp; Studio plans
+                  </a>
+                  .
+                </p>
+              )}
             </FieldGroup>
 
             <FieldGroup label="Format">
@@ -1426,7 +1485,7 @@ function Segmented<T extends string>({
 }: {
   value: T;
   onChange: (value: T) => void;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; disabled?: boolean; tooltip?: string }[];
 }) {
   return (
     <div
@@ -1438,11 +1497,16 @@ function Segmented<T extends string>({
     >
       {options.map((o) => {
         const active = o.value === value;
+        const disabled = o.disabled === true;
         return (
           <button
             key={o.value}
-            onClick={() => onChange(o.value)}
-            className={`px-4 py-2 rounded text-sm font-medium transition-all ${active ? 'text-a7-void' : 'text-a7-text/50 hover:text-a7-text'}`}
+            onClick={() => !disabled && onChange(o.value)}
+            disabled={disabled}
+            title={o.tooltip}
+            className={`px-4 py-2 rounded text-sm font-medium transition-all ${
+              active ? 'text-a7-void' : 'text-a7-text/50 hover:text-a7-text'
+            } ${disabled ? 'opacity-40 cursor-not-allowed hover:text-a7-text/50' : ''}`}
             style={
               active
                 ? {
