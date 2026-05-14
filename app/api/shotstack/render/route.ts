@@ -8,12 +8,17 @@ import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { submitRender } from '@/lib/shotstack/client';
 import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
+import { rateLimitResponse } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
+
+    const limited = rateLimitResponse('shotstack-render', user.id);
+    if (limited) return limited;
+
     const supabase = await createServerSupabaseClient();
     const { editId } = await request.json();
 
@@ -105,14 +110,25 @@ export async function POST(request: NextRequest) {
       .update({ status: 'rendering' })
       .eq('id', editId);
 
-    // Log credit transaction
-    await supabase.from('credit_transactions').insert({
+    // Log credit transaction. Failure here doesn't block the response — the
+    // credit has already been debited atomically — but we surface it so we
+    // can spot a broken audit trail.
+    const { error: txError } = await supabase.from('credit_transactions').insert({
       user_id: user.id,
       amount: -1,
       balance_after: newBalance,
       reason: 'render',
       reference_id: editId,
     });
+    if (txError) {
+      console.error('[shotstack/render] credit_transactions insert failed', {
+        userId: user.id,
+        amount: -1,
+        balanceAfter: newBalance,
+        editId,
+        error: txError.message,
+      });
+    }
 
     return NextResponse.json({
       jobId: job.id,

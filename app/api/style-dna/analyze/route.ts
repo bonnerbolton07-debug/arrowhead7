@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { analyzeReferenceVideos } from '@/lib/style-dna/analyzer';
+import { rateLimitResponse } from '@/lib/rate-limit';
 import { z } from 'zod';
 
 export const runtime = 'nodejs';
@@ -33,6 +34,10 @@ const Body = z.object({
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
+
+    const limited = rateLimitResponse('style-dna-analyze', user.id);
+    if (limited) return limited;
+
     const json = await request.json();
     const parsed = Body.safeParse(json);
     if (!parsed.success) {

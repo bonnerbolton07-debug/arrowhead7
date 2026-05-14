@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser, createServerSupabaseClient } from '@/lib/supabase/server';
+import { rateLimitResponse } from '@/lib/rate-limit';
 import {
   publishToChannel,
   type Platform,
@@ -25,6 +26,10 @@ interface MultiTarget {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
+
+    const limited = rateLimitResponse('distribute-multi', user.id);
+    if (limited) return limited;
+
     const body = await request.json();
     const {
       editId,
