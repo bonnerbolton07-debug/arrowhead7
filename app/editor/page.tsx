@@ -10,7 +10,12 @@ import {
 } from '@/components/strategy/EditorStrategyBanner';
 import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
 import type { StrategyPlatform } from '@/types/strategy';
-import { uploadToR2, maybeCompressImage, type UploadProgress } from '@/lib/upload/client';
+import {
+  uploadToR2,
+  maybeCompressImage,
+  type UploadProgress,
+  type UploadResumeState,
+} from '@/lib/upload/client';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -60,6 +65,16 @@ interface ReferenceItem {
   partsCompleted?: number;
   totalParts?: number;
   uploadMode?: 'single' | 'multipart';
+  /** Set when a part is currently retrying (attempt 2, 3…). */
+  retryingAttempt?: number;
+  /** Surfaced from the upload client when concurrency has been throttled. */
+  currentConcurrency?: number;
+  /** Persisted after every successful part so the "Resume upload" button
+   *  can pick up where the network died. */
+  resumeState?: UploadResumeState;
+  /** Original File handle held in memory so resume doesn't require the user
+   *  to re-pick the file. Not stored across navigations — refresh = reset. */
+  file?: File;
   error?: string;
 }
 
@@ -118,6 +133,7 @@ export default function EditorPage() {
   const [footageR2Key, setFootageR2Key] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [footageError, setFootageError] = useState<string | null>(null);
+  const [footageResumeState, setFootageResumeState] = useState<UploadResumeState | null>(null);
 
   // Step 3 — Style DNA analysis
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle');
@@ -183,6 +199,58 @@ export default function EditorPage() {
     });
   }, []);
 
+  /** Run the actual uploadToR2 call. Factored so retry-from-resume can call
+   *  it with the same File and a `resumeFrom` state. */
+  const runReferenceUpload = useCallback(async (
+    id: string,
+    file: File,
+    kind: RefKind,
+    resumeFrom?: UploadResumeState,
+  ) => {
+    updateReference(id, {
+      status: 'uploading',
+      error: undefined,
+      progress: resumeFrom
+        ? Math.round((resumeFrom.completedParts.length / resumeFrom.totalParts) * 100)
+        : 0,
+    });
+    try {
+      const { key } = await uploadToR2(file, {
+        kind: kind === 'image' ? 'reference-image' : 'source',
+        resumeFrom,
+        onProgress: (p: UploadProgress) =>
+          updateReference(id, {
+            progress: p.pct,
+            loadedBytes: p.loadedBytes,
+            totalBytes: p.totalBytes,
+            partsCompleted: p.partsCompleted,
+            totalParts: p.totalParts,
+            uploadMode: p.mode,
+            retryingAttempt: p.retryingAttempt,
+            currentConcurrency: p.currentConcurrency,
+          }),
+        onResumeStateChange: (state) => updateReference(id, { resumeState: state }),
+      });
+      updateReference(id, {
+        status: 'ready',
+        url: key,
+        progress: 100,
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        retryingAttempt: undefined,
+        // Keep `file` so users can still retry from this slot if the next step
+        // (e.g. analyze) somehow re-triggers an upload — cheap to hold and
+        // discarded on page nav anyway.
+      });
+    } catch (err) {
+      updateReference(id, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Upload failed',
+        retryingAttempt: undefined,
+      });
+    }
+  }, [updateReference]);
+
   const uploadReferenceFile = useCallback(async (rawFile: File) => {
     if (!ALLOWED_MIME.has(rawFile.type)) {
       setReferenceError('Supported types: MP4/MOV/AVI/WebM or JPG/PNG/WebP/GIF/HEIC/AVIF.');
@@ -209,36 +277,27 @@ export default function EditorPage() {
         label: file.name,
         status: 'uploading',
         progress: 0,
+        file,
+        totalBytes: file.size,
+        loadedBytes: 0,
       },
     ]);
 
-    try {
-      const { key } = await uploadToR2(file, {
-        kind: kind === 'image' ? 'reference-image' : 'source',
-        onProgress: (p: UploadProgress) =>
-          updateReference(id, {
-            progress: p.pct,
-            loadedBytes: p.loadedBytes,
-            totalBytes: p.totalBytes,
-            partsCompleted: p.partsCompleted,
-            totalParts: p.totalParts,
-            uploadMode: p.mode,
-          }),
-      });
-      updateReference(id, {
-        status: 'ready',
-        url: key,
-        progress: 100,
-        loadedBytes: file.size,
-        totalBytes: file.size,
-      });
-    } catch (err) {
-      updateReference(id, {
-        status: 'error',
-        error: err instanceof Error ? err.message : 'Upload failed',
-      });
-    }
-  }, [updateReference]);
+    await runReferenceUpload(id, file, kind);
+  }, [runReferenceUpload]);
+
+  /** Resume a multipart upload that hard-failed. Called from the "Tap to
+   *  retry" button on the upload row. Reuses the same R2 multipart UploadId
+   *  so the parts that already succeeded don't get re-uploaded. */
+  const retryReferenceUpload = useCallback((id: string) => {
+    setReferences((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (!target || !target.file) return prev;
+      // Fire-and-forget — the upload writes its progress into state via callbacks.
+      void runReferenceUpload(id, target.file, target.kind, target.resumeState);
+      return prev;
+    });
+  }, [runReferenceUpload]);
 
   const addReferenceUrl = useCallback(() => {
     const trimmed = pendingUrl.trim();
@@ -265,23 +324,28 @@ export default function EditorPage() {
   }, [pendingUrl]);
 
   // ─── Step 2: Footage Upload ─────────────────────────────────────────────
-  const uploadFootage = useCallback(async (file: File) => {
-    if (!ALLOWED_MIME.has(file.type)) {
-      setFootageError('Use MP4, MOV, AVI, or WebM.');
-      return;
-    }
-    setFootageFile(file);
+  const runFootageUpload = useCallback(async (file: File, resumeFrom?: UploadResumeState) => {
     setFootageError(null);
     setFootageUploadState('uploading');
-    setFootageProgress({ pct: 0, loadedBytes: 0, totalBytes: file.size, mode: 'single' });
+    setFootageProgress({
+      pct: resumeFrom
+        ? Math.round((resumeFrom.completedParts.length / resumeFrom.totalParts) * 100)
+        : 0,
+      loadedBytes: 0,
+      totalBytes: file.size,
+      mode: resumeFrom ? 'multipart' : 'single',
+    });
     try {
       const { key, editId: newEditId } = await uploadToR2(file, {
         kind: 'source',
+        resumeFrom,
         onProgress: (p) => setFootageProgress(p),
+        onResumeStateChange: (state) => setFootageResumeState(state),
       });
 
       setFootageR2Key(key);
       setEditId(newEditId);
+      setFootageResumeState(null);
       setFootageUploadState('done');
       setFootageProgress({
         pct: 100,
@@ -312,6 +376,22 @@ export default function EditorPage() {
       setFootageUploadState('error');
     }
   }, [readyRefs]);
+
+  const uploadFootage = useCallback(async (file: File) => {
+    if (!ALLOWED_MIME.has(file.type)) {
+      setFootageError('Use MP4, MOV, AVI, or WebM.');
+      return;
+    }
+    setFootageFile(file);
+    setFootageResumeState(null);
+    await runFootageUpload(file);
+  }, [runFootageUpload]);
+
+  /** Resume a multipart footage upload that hard-failed. */
+  const retryFootageUpload = useCallback(() => {
+    if (!footageFile) return;
+    void runFootageUpload(footageFile, footageResumeState ?? undefined);
+  }, [footageFile, footageResumeState, runFootageUpload]);
 
   // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
@@ -732,6 +812,7 @@ export default function EditorPage() {
                       onMoveUp={() => moveReference(ref.id, -1)}
                       onMoveDown={() => moveReference(ref.id, 1)}
                       onRemove={() => removeReference(ref.id)}
+                      onRetry={() => retryReferenceUpload(ref.id)}
                     />
                   ))}
                 </div>
@@ -756,6 +837,8 @@ export default function EditorPage() {
               onFile={uploadFootage}
               progress={footageProgress}
               error={footageError}
+              canResume={!!footageResumeState}
+              onRetry={retryFootageUpload}
             />
 
             {footageError && (
@@ -1161,6 +1244,8 @@ function DropZone({
   onFile,
   progress,
   error,
+  canResume,
+  onRetry,
   accept,
 }: {
   file: File | null;
@@ -1168,6 +1253,11 @@ function DropZone({
   onFile: (file: File) => void;
   progress?: UploadProgress | null;
   error?: string | null;
+  /** When true, a multipart upload is paused mid-flight and we can pick up
+   *  from the last successful part instead of re-uploading the entire file. */
+  canResume?: boolean;
+  /** Click handler for the Retry / Resume button rendered in the error state. */
+  onRetry?: () => void;
   accept?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1245,8 +1335,38 @@ function DropZone({
             state="error"
           />
           <p className="text-xs mt-2 break-words" style={{ color: '#EF4444' }}>
-            {error || 'Upload failed — click to retry'}
+            {error || 'Upload paused — network error'}
           </p>
+          {canResume && progress && progress.partsCompleted !== undefined && progress.totalParts !== undefined && (
+            <p className="text-[11px] text-a7-text/40 mt-1">
+              {progress.partsCompleted} of {progress.totalParts} parts already uploaded — resume keeps them.
+            </p>
+          )}
+          {onRetry && (
+            <button
+              type="button"
+              onClick={(e) => {
+                // The drop zone is a <label>, so clicks bubble into the file
+                // chooser. Stop propagation so the retry button doesn't also
+                // open the file picker.
+                e.preventDefault();
+                e.stopPropagation();
+                onRetry();
+              }}
+              className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all"
+              style={{
+                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                color: '#0A0A0A',
+                boxShadow: '0 0 14px rgba(45,212,191,0.3)',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+              {canResume ? 'Resume upload' : 'Retry upload'}
+            </button>
+          )}
         </>
       )}
     </label>
@@ -1290,9 +1410,11 @@ function UploadProgressView({
       </div>
       <UploadProgressBar pct={pct} state="uploading" />
       <p className="text-[11px] sm:text-xs text-a7-text/40">
-        {isMulti
-          ? `Uploading… part ${(progress?.partsCompleted ?? 0) + (pct < 100 ? 1 : 0)} / ${progress?.totalParts ?? 1} · ${MULTIPART_LABEL}`
-          : 'Uploading…'}
+        {progress?.retryingAttempt && progress.retryingAttempt > 1
+          ? `Network hiccup — retrying part ${(progress.partsCompleted ?? 0) + 1} (attempt ${progress.retryingAttempt}/4)…`
+          : isMulti
+            ? `Uploading… part ${Math.min((progress?.partsCompleted ?? 0) + 1, progress?.totalParts ?? 1)} / ${progress?.totalParts ?? 1}${progress?.currentConcurrency && progress.currentConcurrency < 3 ? ' · throttled for slow network' : ''}`
+            : 'Uploading…'}
       </p>
     </div>
   );
@@ -1428,6 +1550,7 @@ function ReferenceRow({
   onMoveUp,
   onMoveDown,
   onRemove,
+  onRetry,
 }: {
   item: ReferenceItem;
   isFirst: boolean;
@@ -1435,6 +1558,7 @@ function ReferenceRow({
   onMoveUp: () => void;
   onMoveDown: () => void;
   onRemove: () => void;
+  onRetry: () => void;
 }) {
   const isReady = item.status === 'ready';
   const isUploading = item.status === 'uploading';
@@ -1522,9 +1646,11 @@ function ReferenceRow({
             <UploadProgressBar pct={Math.max(item.progress ?? 0, 2)} state="uploading" />
             <div className="flex items-center justify-between gap-2 text-[10px] text-a7-text/40 tabular-nums">
               <span className="truncate">
-                {item.uploadMode === 'multipart' && item.totalParts
-                  ? `Part ${(item.partsCompleted ?? 0) + (item.progress ?? 0) < 100 ? (item.partsCompleted ?? 0) + 1 : item.totalParts} / ${item.totalParts}`
-                  : 'Uploading…'}
+                {item.retryingAttempt && item.retryingAttempt > 1
+                  ? `Retrying part ${(item.partsCompleted ?? 0) + 1} · attempt ${item.retryingAttempt}/4`
+                  : item.uploadMode === 'multipart' && item.totalParts
+                    ? `Part ${Math.min((item.partsCompleted ?? 0) + 1, item.totalParts)} / ${item.totalParts}${item.currentConcurrency && item.currentConcurrency < 3 ? ` · slow network` : ''}`
+                    : 'Uploading…'}
               </span>
               {typeof item.totalBytes === 'number' && (
                 <span>
@@ -1534,10 +1660,40 @@ function ReferenceRow({
             </div>
           </div>
         )}
-        {isError && item.error && (
-          <p className="mt-1 text-[11px] break-words" style={{ color: '#EF4444' }}>
-            {item.error}
-          </p>
+        {isError && (
+          <div className="mt-1.5 space-y-1.5">
+            {typeof item.totalParts === 'number' && (item.partsCompleted ?? 0) > 0 && (
+              <UploadProgressBar pct={Math.max(item.progress ?? 0, 4)} state="error" />
+            )}
+            {item.error && (
+              <p className="text-[11px] break-words" style={{ color: '#EF4444' }}>
+                {item.error}
+              </p>
+            )}
+            {item.resumeState && (
+              <p className="text-[10px] text-a7-text/40">
+                {item.resumeState.completedParts.length} of {item.resumeState.totalParts} parts already uploaded — resume keeps them.
+              </p>
+            )}
+            {item.file && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold transition-all"
+                style={{
+                  background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                  color: '#0A0A0A',
+                  boxShadow: '0 0 10px rgba(45,212,191,0.3)',
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+                  <path d="M21 3v5h-5" />
+                </svg>
+                {item.resumeState ? 'Resume' : 'Retry'}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
