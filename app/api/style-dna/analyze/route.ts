@@ -5,6 +5,8 @@
 // -> { styleDNA: Omit<StyleDNA, 'id'|'created_at'|'updated_at'> }
 //
 // Runs in the Node.js runtime because the analyser shells out to FFmpeg.
+// Includes a 60s analysis timeout — if the FFmpeg pipeline doesn't complete
+// in time, returns a graceful error so the frontend doesn't hang.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
@@ -14,6 +16,9 @@ import { z } from 'zod';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
+
+/** Hard ceiling so the Lambda never idles for 5 minutes on a stuck pipeline. */
+const ANALYSIS_TIMEOUT_MS = 60_000;
 
 const Body = z.object({
   references: z.array(
@@ -30,6 +35,16 @@ const Body = z.object({
   }).optional(),
 });
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer!));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
@@ -40,7 +55,11 @@ export async function POST(request: NextRequest) {
     }
     const { references, options } = parsed.data;
 
-    const dna = await analyzeReferenceVideos(references, user.id, options);
+    const dna = await withTimeout(
+      analyzeReferenceVideos(references, user.id, options),
+      ANALYSIS_TIMEOUT_MS,
+      'Style DNA analysis'
+    );
     return NextResponse.json({ styleDNA: dna });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {
