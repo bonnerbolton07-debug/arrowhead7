@@ -40,8 +40,27 @@ export interface UploadResult {
   editId: string;
 }
 
+/**
+ * Progress callback payload. Richer than just a percentage so the UI can
+ * surface bytes-transferred + multipart-aware status text (e.g. "Part 2/4").
+ */
+export interface UploadProgress {
+  /** 0–100, rounded. Never reaches 100 until the final commit succeeds. */
+  pct: number;
+  /** Bytes uploaded so far (aggregate across parts for multipart). */
+  loadedBytes: number;
+  /** Total bytes to upload. */
+  totalBytes: number;
+  /** For multipart: number of parts fully PUT so far. Undefined for single-PUT. */
+  partsCompleted?: number;
+  /** For multipart: total parts the file was split into. Undefined for single-PUT. */
+  totalParts?: number;
+  /** 'single' for a one-shot PUT, 'multipart' for parallel-part uploads. */
+  mode: 'single' | 'multipart';
+}
+
 export interface UploadOptions extends UploadKind {
-  onProgress?: (pct: number) => void;
+  onProgress?: (progress: UploadProgress) => void;
   /** Optional AbortSignal — cancels the upload and aborts the multipart on R2. */
   signal?: AbortSignal;
 }
@@ -82,7 +101,13 @@ async function uploadSingle(file: File, opts: UploadOptions): Promise<UploadResu
     xhr.setRequestHeader('Content-Type', file.type);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && opts.onProgress) {
-        opts.onProgress(Math.round((e.loaded / e.total) * 100));
+        const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        opts.onProgress({
+          pct,
+          loadedBytes: e.loaded,
+          totalBytes: e.total,
+          mode: 'single',
+        });
       }
     };
     xhr.onload = () =>
@@ -97,6 +122,14 @@ async function uploadSingle(file: File, opts: UploadOptions): Promise<UploadResu
     xhr.send(file);
   });
 
+  if (opts.onProgress) {
+    opts.onProgress({
+      pct: 100,
+      loadedBytes: file.size,
+      totalBytes: file.size,
+      mode: 'single',
+    });
+  }
   return { key, editId };
 }
 
@@ -127,13 +160,22 @@ async function uploadMultipart(file: File, opts: UploadOptions): Promise<UploadR
   const reportProgress = () => {
     if (!opts.onProgress) return;
     let loaded = 0;
+    let partsCompleted = 0;
     for (let i = 0; i < totalParts; i++) {
       const partSize = i === totalParts - 1
         ? file.size - i * MULTIPART_PART_SIZE_BYTES
         : MULTIPART_PART_SIZE_BYTES;
       loaded += (partProgress[i] / 100) * partSize;
+      if (partProgress[i] >= 100) partsCompleted++;
     }
-    opts.onProgress(Math.min(99, Math.round((loaded / file.size) * 100)));
+    opts.onProgress({
+      pct: Math.min(99, Math.round((loaded / file.size) * 100)),
+      loadedBytes: Math.min(file.size, Math.round(loaded)),
+      totalBytes: file.size,
+      partsCompleted,
+      totalParts,
+      mode: 'multipart',
+    });
   };
 
   const completed: Array<{ partNumber: number; etag: string }> = [];
@@ -219,7 +261,16 @@ async function uploadMultipart(file: File, opts: UploadOptions): Promise<UploadR
       const body = await completeRes.json().catch(() => ({}));
       throw new Error(body.error || 'Failed to complete multipart upload');
     }
-    if (opts.onProgress) opts.onProgress(100);
+    if (opts.onProgress) {
+      opts.onProgress({
+        pct: 100,
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        partsCompleted: totalParts,
+        totalParts,
+        mode: 'multipart',
+      });
+    }
     return { key, editId };
   } catch (err) {
     // Best-effort abort so R2 doesn't keep the partial parts around.

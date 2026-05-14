@@ -10,7 +10,7 @@ import {
 } from '@/components/strategy/EditorStrategyBanner';
 import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
 import type { StrategyPlatform } from '@/types/strategy';
-import { uploadToR2, maybeCompressImage } from '@/lib/upload/client';
+import { uploadToR2, maybeCompressImage, type UploadProgress } from '@/lib/upload/client';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -50,6 +50,16 @@ interface ReferenceItem {
   label: string;
   status: RefStatus;
   progress?: number;
+  /** File size in bytes. Set when an upload is in flight so the UI can show
+   *  "12 MB / 50 MB" alongside the percentage. */
+  totalBytes?: number;
+  loadedBytes?: number;
+  /** Multipart-aware status: when the upload is split into parts, surface the
+   *  current part / total parts so the user can see "Part 2 / 6" instead of a
+   *  bar that appears to be stalling. */
+  partsCompleted?: number;
+  totalParts?: number;
+  uploadMode?: 'single' | 'multipart';
   error?: string;
 }
 
@@ -104,7 +114,7 @@ export default function EditorPage() {
   // Step 2 — Footage
   const [footageFile, setFootageFile] = useState<File | null>(null);
   const [footageUploadState, setFootageUploadState] = useState<UploadState>('idle');
-  const [footageProgress, setFootageProgress] = useState(0);
+  const [footageProgress, setFootageProgress] = useState<UploadProgress | null>(null);
   const [footageR2Key, setFootageR2Key] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [footageError, setFootageError] = useState<string | null>(null);
@@ -205,9 +215,23 @@ export default function EditorPage() {
     try {
       const { key } = await uploadToR2(file, {
         kind: kind === 'image' ? 'reference-image' : 'source',
-        onProgress: (pct) => updateReference(id, { progress: pct }),
+        onProgress: (p: UploadProgress) =>
+          updateReference(id, {
+            progress: p.pct,
+            loadedBytes: p.loadedBytes,
+            totalBytes: p.totalBytes,
+            partsCompleted: p.partsCompleted,
+            totalParts: p.totalParts,
+            uploadMode: p.mode,
+          }),
       });
-      updateReference(id, { status: 'ready', url: key, progress: 100 });
+      updateReference(id, {
+        status: 'ready',
+        url: key,
+        progress: 100,
+        loadedBytes: file.size,
+        totalBytes: file.size,
+      });
     } catch (err) {
       updateReference(id, {
         status: 'error',
@@ -249,17 +273,22 @@ export default function EditorPage() {
     setFootageFile(file);
     setFootageError(null);
     setFootageUploadState('uploading');
-    setFootageProgress(0);
+    setFootageProgress({ pct: 0, loadedBytes: 0, totalBytes: file.size, mode: 'single' });
     try {
       const { key, editId: newEditId } = await uploadToR2(file, {
         kind: 'source',
-        onProgress: (pct) => setFootageProgress(pct),
+        onProgress: (p) => setFootageProgress(p),
       });
 
       setFootageR2Key(key);
       setEditId(newEditId);
       setFootageUploadState('done');
-      setFootageProgress(100);
+      setFootageProgress({
+        pct: 100,
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        mode: 'single',
+      });
 
       // Persist a draft edit row so render has something to attach to.
       try {
@@ -726,6 +755,7 @@ export default function EditorPage() {
               uploadState={footageUploadState}
               onFile={uploadFootage}
               progress={footageProgress}
+              error={footageError}
             />
 
             {footageError && (
@@ -1130,12 +1160,14 @@ function DropZone({
   uploadState,
   onFile,
   progress,
+  error,
   accept,
 }: {
   file: File | null;
   uploadState: UploadState;
   onFile: (file: File) => void;
-  progress?: number;
+  progress?: UploadProgress | null;
+  error?: string | null;
   accept?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1194,41 +1226,134 @@ function DropZone({
       )}
 
       {file && uploadState === 'uploading' && (
-        <>
-          <p className="text-a7-text text-sm mb-2 truncate">{file.name}</p>
-          <div
-            className="w-full rounded-full h-1.5 mb-2"
-            style={{ background: 'linear-gradient(90deg, #1A1918, #10100E)' }}
-          >
-            <div
-              className="h-1.5 rounded-full transition-all"
-              style={{
-                width: `${typeof progress === 'number' ? Math.max(progress, 3) : 50}%`,
-                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-              }}
-            />
-          </div>
-          <p className="text-a7-text/30 text-xs">
-            Uploading{typeof progress === 'number' ? ` ${progress}%` : '...'}
-          </p>
-        </>
+        <UploadProgressView file={file} progress={progress ?? null} />
       )}
 
       {file && uploadState === 'done' && (
         <>
-          <p className="text-a7-text text-sm mb-1 truncate">{file.name}</p>
-          <p className="text-grad-teal text-xs">Uploaded</p>
+          <p className="text-a7-text text-sm mb-1 truncate" title={file.name}>{file.name}</p>
+          <UploadProgressBar pct={100} state="done" />
+          <p className="text-grad-teal text-xs mt-2">Uploaded · {formatBytes(file.size)}</p>
         </>
       )}
 
       {file && uploadState === 'error' && (
         <>
-          <p className="text-a7-text text-sm mb-1 truncate">{file.name}</p>
-          <p className="text-xs" style={{ color: '#E8B06A' }}>Upload failed &mdash; click to retry</p>
+          <p className="text-a7-text text-sm mb-1 truncate" title={file.name}>{file.name}</p>
+          <UploadProgressBar
+            pct={Math.max(progress?.pct ?? 0, 4)}
+            state="error"
+          />
+          <p className="text-xs mt-2 break-words" style={{ color: '#EF4444' }}>
+            {error || 'Upload failed — click to retry'}
+          </p>
         </>
       )}
     </label>
   );
+}
+
+/** Big, prominent in-flight progress display — shown above the drop zone glyph
+ *  whenever an upload is in progress. Always shows the live percentage, bytes
+ *  transferred, and (for multipart) which part is currently in flight. */
+function UploadProgressView({
+  file,
+  progress,
+}: {
+  file: File;
+  progress: UploadProgress | null;
+}) {
+  const pct = Math.max(progress?.pct ?? 0, 2);
+  const loaded = progress?.loadedBytes ?? 0;
+  const total = progress?.totalBytes ?? file.size;
+  const isMulti = progress?.mode === 'multipart';
+  return (
+    <div className="space-y-2">
+      <p className="text-a7-text text-sm font-medium truncate" title={file.name}>
+        {file.name}
+      </p>
+      <div className="flex items-baseline justify-between gap-2">
+        <span
+          className="text-2xl sm:text-3xl font-bold tabular-nums"
+          style={{
+            background: 'linear-gradient(135deg, #5BE8D5, #2DD4BF)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}
+        >
+          {pct}%
+        </span>
+        <span className="text-[11px] sm:text-xs text-a7-text/50 tabular-nums truncate">
+          {formatBytes(loaded)} / {formatBytes(total)}
+        </span>
+      </div>
+      <UploadProgressBar pct={pct} state="uploading" />
+      <p className="text-[11px] sm:text-xs text-a7-text/40">
+        {isMulti
+          ? `Uploading… part ${(progress?.partsCompleted ?? 0) + (pct < 100 ? 1 : 0)} / ${progress?.totalParts ?? 1} · ${MULTIPART_LABEL}`
+          : 'Uploading…'}
+      </p>
+    </div>
+  );
+}
+
+/** Branded, smoothly-transitioning progress bar. Used by every upload UI in
+ *  the editor (drop zone + reference rows). The "shimmer" overlay keeps the
+ *  bar feeling alive even when a multipart chunk is between part boundaries. */
+function UploadProgressBar({
+  pct,
+  state,
+}: {
+  pct: number;
+  state: 'uploading' | 'done' | 'error';
+}) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const fillBg =
+    state === 'error'
+      ? 'linear-gradient(135deg, #EF4444, #B91C1C)'
+      : state === 'done'
+      ? 'linear-gradient(135deg, #1a9e8f, #2DD4BF, #5BE8D5)'
+      : 'linear-gradient(135deg, #1a9e8f, #2DD4BF)';
+  const glow =
+    state === 'error'
+      ? '0 0 12px rgba(239,68,68,0.45)'
+      : '0 0 12px rgba(45,212,191,0.45)';
+  return (
+    <div
+      className="w-full rounded-full overflow-hidden"
+      style={{
+        height: 10,
+        background: 'linear-gradient(90deg, #1A1918, #10100E)',
+        border: '1px solid rgba(245,240,232,0.05)',
+      }}
+      role="progressbar"
+      aria-valuenow={clamped}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div
+        className={`h-full rounded-full ${state === 'uploading' ? 'shimmer' : ''}`}
+        style={{
+          width: `${clamped}%`,
+          background: fillBg,
+          boxShadow: glow,
+          // ease-out so chunky multipart updates feel smooth instead of jumpy.
+          transition: 'width 220ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease-out',
+        }}
+      />
+    </div>
+  );
+}
+
+const MULTIPART_LABEL = 'Parallel multipart upload (~8MB per part, 4 concurrent)';
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1352,7 +1477,7 @@ function ReferenceRow({
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
           <span
             className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider"
             style={{
@@ -1368,30 +1493,51 @@ function ReferenceRow({
           </span>
           {isReady && <span className="text-[10px] text-grad-teal">ready</span>}
           {isUploading && (
-            <span className="text-[10px] text-a7-text/40">
-              uploading {item.progress ?? 0}%
+            <span
+              className="text-[11px] font-semibold tabular-nums"
+              style={{
+                background: 'linear-gradient(135deg, #5BE8D5, #2DD4BF)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              {item.progress ?? 0}%
             </span>
           )}
           {isError && (
-            <span className="text-[10px]" style={{ color: '#E8B06A' }}>
-              {item.error || 'error'}
+            <span className="text-[10px]" style={{ color: '#EF4444' }}>
+              error
             </span>
           )}
         </div>
-        <div className="text-xs text-a7-text/70 truncate">{item.label}</div>
+        <div
+          className="text-xs text-a7-text/70 truncate"
+          title={item.label}
+        >
+          {item.label}
+        </div>
         {isUploading && (
-          <div
-            className="mt-1 w-full h-1 rounded-full overflow-hidden"
-            style={{ background: 'rgba(245,240,232,0.06)' }}
-          >
-            <div
-              className="h-full transition-all"
-              style={{
-                width: `${Math.max(item.progress ?? 0, 5)}%`,
-                background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
-              }}
-            />
+          <div className="mt-1.5 space-y-1">
+            <UploadProgressBar pct={Math.max(item.progress ?? 0, 2)} state="uploading" />
+            <div className="flex items-center justify-between gap-2 text-[10px] text-a7-text/40 tabular-nums">
+              <span className="truncate">
+                {item.uploadMode === 'multipart' && item.totalParts
+                  ? `Part ${(item.partsCompleted ?? 0) + (item.progress ?? 0) < 100 ? (item.partsCompleted ?? 0) + 1 : item.totalParts} / ${item.totalParts}`
+                  : 'Uploading…'}
+              </span>
+              {typeof item.totalBytes === 'number' && (
+                <span>
+                  {formatBytes(item.loadedBytes ?? 0)} / {formatBytes(item.totalBytes)}
+                </span>
+              )}
+            </div>
           </div>
+        )}
+        {isError && item.error && (
+          <p className="mt-1 text-[11px] break-words" style={{ color: '#EF4444' }}>
+            {item.error}
+          </p>
         )}
       </div>
 
