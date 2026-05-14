@@ -141,14 +141,16 @@ export async function runFfprobe(args: readonly string[], options?: FfmpegRunOpt
 }
 
 /**
- * Verify that an FFmpeg binary is reachable. We try to spawn `ffmpeg -version`;
- * if that succeeds the analyser can run for real. Otherwise callers should fall
- * back to the heuristic path (used when running in environments without the
- * binary, e.g. quick local dev without the installer downloaded).
+ * Verify that BOTH FFmpeg and FFprobe binaries are reachable. The analyser
+ * needs ffprobe for metadata extraction and ffmpeg for frame/audio extraction.
+ * If either is missing the caller should fall back to the heuristic path.
  */
 export async function isFfmpegAvailable(): Promise<boolean> {
   try {
-    await runProcess(getFfmpegPath(), ['-version'], { timeoutMs: 5_000 });
+    await Promise.all([
+      runProcess(getFfmpegPath(), ['-version'], { timeoutMs: 5_000 }),
+      runProcess(getFfprobePath(), ['-version'], { timeoutMs: 5_000 }),
+    ]);
     return true;
   } catch {
     return false;
