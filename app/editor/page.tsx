@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Logo, LogoIcon } from '@/components/ui/Logo';
 import { getClient } from '@/lib/supabase/client';
 import type { StyleDNA } from '@/types/edit';
@@ -119,9 +120,33 @@ function classNames(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
 }
 
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
+
+function friendlyUploadError(err: unknown, status?: number): string {
+  if (status === 413) return 'File too large (max 500MB)';
+  if (status === 401) return 'Session expired — please refresh the page';
+  if (status === 415) return 'Format not supported — use MP4, MOV, or WebM';
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  if (/network/i.test(msg) || /failed to fetch/i.test(msg)) {
+    return 'Upload failed — check your connection and try again';
+  }
+  if (/too large|exceeds/i.test(msg)) return 'File too large (max 500MB)';
+  if (/unsupported|format/i.test(msg)) {
+    return 'Format not supported — use MP4, MOV, or WebM';
+  }
+  if (/unauthorized/i.test(msg)) return 'Session expired — please refresh the page';
+  return msg || 'Upload failed — check your connection and try again';
+}
+
 export default function EditorPage() {
   const strategyBrief = useStrategyBrief();
+  const searchParams = useSearchParams();
+  const resumeId = searchParams?.get('id') ?? null;
   const [step, setStep] = useState<Step>('reference');
+  const [resumeState, setResumeState] = useState<'idle' | 'loading' | 'done' | 'error'>(
+    resumeId ? 'loading' : 'idle'
+  );
+  const [resumeError, setResumeError] = useState<string | null>(null);
 
   // Step 1 — References (multiple videos and/or images)
   const [references, setReferences] = useState<ReferenceItem[]>([]);
@@ -289,14 +314,11 @@ export default function EditorPage() {
         loadedBytes: file.size,
         totalBytes: file.size,
         retryingAttempt: undefined,
-        // Keep `file` so users can still retry from this slot if the next step
-        // (e.g. analyze) somehow re-triggers an upload — cheap to hold and
-        // discarded on page nav anyway.
       });
     } catch (err) {
       updateReference(id, {
         status: 'error',
-        error: err instanceof Error ? err.message : 'Upload failed',
+        error: friendlyUploadError(err),
         retryingAttempt: undefined,
       });
     }
@@ -304,7 +326,11 @@ export default function EditorPage() {
 
   const uploadReferenceFile = useCallback(async (rawFile: File) => {
     if (!ALLOWED_MIME.has(rawFile.type)) {
-      setReferenceError('Supported types: MP4/MOV/AVI/WebM or JPG/PNG/WebP/GIF/HEIC/AVIF.');
+      setReferenceError('Format not supported — use MP4, MOV, WebM or JPG/PNG/WebP/HEIC/AVIF');
+      return;
+    }
+    if (rawFile.size > MAX_UPLOAD_BYTES) {
+      setReferenceError('File too large (max 500MB)');
       return;
     }
     setReferenceError(null);
@@ -440,14 +466,18 @@ export default function EditorPage() {
         // Non-fatal — render route will still create what it needs.
       }
     } catch (err) {
-      setFootageError(err instanceof Error ? err.message : 'Upload failed');
+      setFootageError(friendlyUploadError(err, uploadStatus));
       setFootageUploadState('error');
     }
   }, [readyRefs]);
 
   const uploadFootage = useCallback(async (file: File) => {
     if (!ALLOWED_MIME.has(file.type)) {
-      setFootageError('Use MP4, MOV, AVI, or WebM.');
+      setFootageError('Format not supported — use MP4, MOV, or WebM');
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setFootageError('File too large (max 500MB)');
       return;
     }
     setFootageFile(file);
@@ -560,6 +590,103 @@ export default function EditorPage() {
     },
     [readyRefs]
   );
+  // ─── Resume from ?id= ──────────────────────────────────────────────────
+  // When the editor is opened from a recent-edit card, hydrate state from the
+  // existing edit row so the user lands on the appropriate step.
+  useEffect(() => {
+    if (!resumeId || resumeState !== 'loading') return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const supabase = getClient();
+        const { data: edit, error } = await supabase
+          .from('edits')
+          .select('id, status, source_video_url, reference_urls, style_dna_id, render_config, output_video_url, title')
+          .eq('id', resumeId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error || !edit) {
+          setResumeError(error?.message || 'Edit not found.');
+          setResumeState('error');
+          return;
+        }
+
+        setEditId(edit.id);
+
+        // Restore references (text array of R2 keys or external URLs)
+        const refUrls: string[] = Array.isArray(edit.reference_urls) ? edit.reference_urls : [];
+        if (refUrls.length > 0) {
+          setReferences(
+            refUrls.map((u) => {
+              const isExternal = /^https?:\/\//i.test(u);
+              return {
+                id: makeId(),
+                kind: inferKindFromUrl(u),
+                source: isExternal ? 'url' : 'upload',
+                url: u,
+                label: isExternal ? u : u.split('/').pop() || u,
+                status: 'ready' as RefStatus,
+                progress: 100,
+              };
+            })
+          );
+        }
+
+        // Restore footage
+        if (edit.source_video_url) {
+          setFootageR2Key(edit.source_video_url);
+          setFootageUploadState('done');
+          setFootageProgress({
+            pct: 100,
+            loadedBytes: 0,
+            totalBytes: 0,
+            mode: 'single',
+          });
+        }
+
+        // Restore style DNA if present
+        if (edit.style_dna_id) {
+          const { data: dna } = await supabase
+            .from('style_dna')
+            .select('*')
+            .eq('id', edit.style_dna_id)
+            .maybeSingle();
+          if (!cancelled && dna) {
+            // The analyzer effect short-circuits when analyzeState !== 'idle'.
+            setStyleDNA(dna as AnalyzedStyleDNA);
+            setAnalyzeState('done');
+            setAnalyzeStage('Style DNA captured');
+          }
+        }
+
+        // Pick a starting step based on what's available
+        if (edit.status === 'completed' && edit.output_video_url) {
+          setOutputUrl(edit.output_video_url);
+          setRenderState('completed');
+          setRenderProgress(100);
+          setStep('render');
+        } else if (edit.style_dna_id && edit.source_video_url) {
+          setStep('configure');
+        } else if (edit.source_video_url) {
+          setStep('style');
+        } else if (refUrls.length > 0) {
+          setStep('footage');
+        } else {
+          setStep('reference');
+        }
+
+        setResumeState('done');
+      } catch (err) {
+        if (cancelled) return;
+        setResumeError(err instanceof Error ? err.message : 'Failed to load edit.');
+        setResumeState('error');
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeId, resumeState]);
 
   // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
@@ -868,7 +995,7 @@ export default function EditorPage() {
             <LogoIcon size={22} variant="dual" />
             <span className="hidden xs:inline truncate">&larr; Dashboard</span>
           </a>
-          <span className="font-medium text-a7-text text-sm sm:text-base truncate">New Edit</span>
+          <span className="font-medium text-a7-text text-sm sm:text-base truncate">{resumeId ? 'Resume Edit' : 'New Edit'}</span>
           <span className="text-[10px] sm:text-sm text-a7-text/40 truncate text-right max-w-[40%]">
             {editId ? `Edit ${editId.slice(0, 8)}` : ''}
           </span>
@@ -914,6 +1041,20 @@ export default function EditorPage() {
       </header>
 
       <main className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 md:px-8 py-6 sm:py-8 relative z-10 w-full">
+        {resumeState === 'loading' ? (
+          <div className="text-center">
+            <div className="inline-block w-8 h-8 rounded-full border-2 border-a7-text/10 border-t-grad-teal animate-spin mb-4" />
+            <p className="text-a7-text/40 text-sm">Loading your edit...</p>
+          </div>
+        ) : resumeState === 'error' ? (
+          <div className="text-center max-w-md">
+            <p className="text-sm mb-2" style={{ color: '#E8B06A' }}>
+              {resumeError || 'Could not load this edit.'}
+            </p>
+            <a href="/editor" className="text-grad-teal text-sm underline">Start a new edit</a>
+          </div>
+        ) : (
+          <>
         {strategyBrief && <EditorStrategyBanner brief={strategyBrief} />}
         {step === 'reference' && (
           <div className="w-full max-w-2xl">
@@ -1438,6 +1579,21 @@ export default function EditorPage() {
                     View in Vault
                   </a>
                   <a
+                    href={outputUrl || '#'}
+                    download
+                    className={classNames(
+                      'flex-1 py-3 rounded-md font-medium text-sm transition-all text-center',
+                      !outputUrl && 'opacity-50 pointer-events-none'
+                    )}
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(45,212,191,0.08), rgba(45,212,191,0.02))',
+                      border: '1px solid rgba(45,212,191,0.25)',
+                      color: '#5BE8D5',
+                    }}
+                  >
+                    Download
+                  </a>
+                  <a
                     href="/dashboard"
                     className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void text-center"
                     style={{
@@ -1484,6 +1640,8 @@ export default function EditorPage() {
               </>
             )}
           </div>
+        )}
+          </>
         )}
       </main>
 
@@ -1667,7 +1825,7 @@ function DropZone({
       {!file && (
         <>
           <p className="text-a7-text/40 text-sm mb-2">Drag & drop or click to choose</p>
-          <p className="text-a7-text/20 text-xs">MP4, MOV, AVI, WebM up to 2GB</p>
+          <p className="text-a7-text/20 text-xs">MP4, MOV, AVI, WebM up to 500MB</p>
         </>
       )}
 
@@ -1894,7 +2052,7 @@ function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
         <line x1="6" y1="28" x2="26" y2="28" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" />
       </svg>
       <p className="text-a7-text/50 text-sm mb-1">Drop videos and images — or click to choose</p>
-      <p className="text-a7-text/20 text-xs">MP4/MOV/WebM up to 2GB · JPG/PNG/WebP/HEIC/AVIF</p>
+      <p className="text-a7-text/20 text-xs">MP4/MOV/WebM up to 500MB · JPG/PNG/WebP/HEIC/AVIF</p>
     </label>
   );
 }
