@@ -4,11 +4,16 @@
 // Accepts a public iCloud Drive share URL, resolves it through Apple's
 // public-records API, streams the file into R2, and records a virtual
 // "connection" so the iCloud card on the Vault page shows as connected.
+//
+// The bytes are piped through the S3 multipart uploader in lib/cloud/pull.ts
+// so the Lambda never buffers the full file — important because Apple's
+// download URLs are short-lived (~5 minutes) and large videos would otherwise
+// hit memory limits.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { downloadIcloudShare, isIcloudShareUrl } from '@/lib/cloud/icloud';
-import { uploadToR2 } from '@/lib/cloudflare/r2';
+import { streamToR2, sanitizeFilename } from '@/lib/cloud/pull';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { encryptToken } from '@/lib/crypto/tokens';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,21 +21,6 @@ import { v4 as uuidv4 } from 'uuid';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
-
-function sanitizeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'icloud-file';
-}
-
-async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,10 +37,13 @@ export async function POST(request: NextRequest) {
     }
 
     const { stream, contentType, name } = await downloadIcloudShare(shareUrl);
-    const buf = await streamToBuffer(stream);
-    const filename = sanitizeName(name);
+    const filename = sanitizeFilename(name);
     const key = `sources/${user.id}/${editId}/${filename}`;
-    await uploadToR2(key, buf, contentType || 'application/octet-stream');
+    const out = await streamToR2({
+      key,
+      contentType: contentType || 'application/octet-stream',
+      stream,
+    });
 
     // Record a virtual "connection" so the iCloud tile flips to connected
     // and the rest of the vault UI lists the user's recent iCloud imports.
@@ -81,8 +74,8 @@ export async function POST(request: NextRequest) {
       editId,
       key,
       name: filename,
-      size: buf.length,
-      mimeType: contentType,
+      size: out.bytes,
+      mimeType: out.contentType,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';

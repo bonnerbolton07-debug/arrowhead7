@@ -11,6 +11,10 @@ import {
 import { PostRenderPlan } from '@/components/strategy/PostRenderPlan';
 import type { StrategyPlatform } from '@/types/strategy';
 import {
+  CloudImportPanel,
+  type ImportedSource,
+} from '@/components/editor/CloudImportPanel';
+import {
   uploadToR2,
   maybeCompressImage,
   type UploadProgress,
@@ -392,6 +396,51 @@ export default function EditorPage() {
     if (!footageFile) return;
     void runFootageUpload(footageFile, footageResumeState ?? undefined);
   }, [footageFile, footageResumeState, runFootageUpload]);
+
+  /**
+   * Cloud import handler — accepts a source that the vault-pull pipeline
+   * already streamed into R2 and slots it into the same state the local
+   * upload path uses. The user's phone never touches the bytes.
+   */
+  const acceptCloudImport = useCallback(
+    async (src: ImportedSource) => {
+      setFootageError(null);
+      setFootageR2Key(src.key);
+      setEditId(src.editId);
+      setFootageProgress({
+        pct: 100,
+        loadedBytes: src.size,
+        totalBytes: src.size,
+        mode: 'single',
+      });
+      setFootageUploadState('done');
+      try {
+        const synthetic = new File([new Uint8Array(0)], src.name, {
+          type: src.mimeType,
+        });
+        setFootageFile(synthetic);
+      } catch {
+        setFootageFile(null);
+      }
+      try {
+        const supabase = getClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from('edits').upsert({
+            id: src.editId,
+            user_id: user.id,
+            title: src.name.replace(/\.[^.]+$/, ''),
+            status: 'draft',
+            source_video_url: src.key,
+            reference_urls: readyRefs.map((r) => r.url),
+          });
+        }
+      } catch {
+        // Non-fatal — render route falls back to its own row creation.
+      }
+    },
+    [readyRefs]
+  );
 
   // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
@@ -827,7 +876,7 @@ export default function EditorPage() {
           <div className="w-full max-w-xl">
             <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Upload Your Footage</h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Drop in the raw video you want edited.
+              Drop in the raw video you want edited — or pull it server-side from your cloud storage.
             </p>
 
             <DropZone
@@ -844,6 +893,14 @@ export default function EditorPage() {
             {footageError && (
               <p className="mt-3 text-sm" style={{ color: '#E8B06A' }}>{footageError}</p>
             )}
+
+            <div className="my-6 flex items-center gap-3">
+              <span className="flex-1 h-px bg-a7-text/[0.06]" />
+              <span className="text-[11px] text-a7-text/30 uppercase tracking-wider">or pull from cloud</span>
+              <span className="flex-1 h-px bg-a7-text/[0.06]" />
+            </div>
+
+            <CloudImportPanel onImported={acceptCloudImport} />
 
             <NavButtons onNext={next} onBack={back} disabled={!canAdvance} nextLabel="Continue" />
           </div>

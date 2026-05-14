@@ -1,7 +1,9 @@
 // =============================================================================
 // Arrowhead 7 — Google Drive: Import
 // =============================================================================
-// Streams a Drive video into R2 under sources/<userId>/<editId>/<name>.
+// Streams a Drive video into R2 under sources/<userId>/<editId>/<name>. The
+// body is piped through the S3 multipart uploader (lib/cloud/pull.ts) so the
+// Lambda never holds more than ~8 MiB at a time.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
@@ -10,28 +12,11 @@ import {
   downloadDriveFile,
   getDriveFile,
 } from '@/lib/cloud/google-drive';
-import { uploadToR2 } from '@/lib/cloudflare/r2';
+import { streamToR2, sanitizeFilename } from '@/lib/cloud/pull';
 import { v4 as uuidv4 } from 'uuid';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
-
-function sanitizeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'video.mp4';
-}
-
-async function streamToBuffer(
-  stream: ReadableStream<Uint8Array>
-): Promise<Buffer> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,18 +39,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const name = sanitizeName(meta.name);
+    const name = sanitizeFilename(meta.name);
     const key = `sources/${user.id}/${editId}/${name}`;
-    const { stream, contentType } = await downloadDriveFile({ accessToken, fileId });
-    const buf = await streamToBuffer(stream);
-    await uploadToR2(key, buf, contentType || meta.mimeType);
+    const { stream, contentType } = await downloadDriveFile({
+      accessToken,
+      fileId,
+    });
+
+    const out = await streamToR2({
+      key,
+      contentType: contentType || meta.mimeType,
+      stream,
+    });
 
     return NextResponse.json({
       editId,
       key,
       name: meta.name,
-      size: buf.length,
-      mimeType: meta.mimeType,
+      size: out.bytes,
+      mimeType: out.contentType,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';

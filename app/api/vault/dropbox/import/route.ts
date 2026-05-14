@@ -8,41 +8,11 @@ import {
   getValidDropboxAccessToken,
   downloadDropboxFile,
 } from '@/lib/cloud/dropbox';
-import { uploadToR2 } from '@/lib/cloudflare/r2';
+import { streamToR2, sanitizeFilename, mimeFromName } from '@/lib/cloud/pull';
 import { v4 as uuidv4 } from 'uuid';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
-
-function sanitizeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'video.mp4';
-}
-
-function mimeFromName(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    mp4: 'video/mp4',
-    mov: 'video/quicktime',
-    m4v: 'video/x-m4v',
-    webm: 'video/webm',
-    avi: 'video/x-msvideo',
-    mkv: 'video/x-matroska',
-  };
-  return (ext && map[ext]) || 'application/octet-stream';
-}
-
-async function streamToBuffer(
-  stream: ReadableStream<Uint8Array>
-): Promise<Buffer> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,21 +27,20 @@ export async function POST(request: NextRequest) {
     }
 
     const { accessToken } = await getValidDropboxAccessToken(user.id);
-    const filename = sanitizeName(name || path.split('/').pop() || 'video.mp4');
+    const filename = sanitizeFilename(name || path.split('/').pop() || 'video.mp4');
     const contentType = mimeFromName(filename);
 
     const { stream } = await downloadDropboxFile({ accessToken, path });
-    const buf = await streamToBuffer(stream);
-
     const key = `sources/${user.id}/${editId}/${filename}`;
-    await uploadToR2(key, buf, contentType);
+
+    const out = await streamToR2({ key, contentType, stream });
 
     return NextResponse.json({
       editId,
       key,
       name: filename,
-      size: buf.length,
-      mimeType: contentType,
+      size: out.bytes,
+      mimeType: out.contentType,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
