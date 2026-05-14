@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildYouTubeAuthUrl } from '@/lib/distribute/youtube';
 import { googleClientCreds } from '@/lib/cloud/google-drive';
-import { generateState, setStateCookie } from '@/lib/oauth/state';
+import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,8 +17,10 @@ export async function GET(request: NextRequest) {
     const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
-    await setStateCookie('youtube', state, nextPath);
-    return NextResponse.redirect(buildYouTubeAuthUrl(state));
+    const redirectUri = getRedirectUri('youtube', request);
+    console.log('[oauth/youtube/connect] redirect_uri:', redirectUri);
+    await setStateCookie('youtube', state, nextPath, redirectUri);
+    return NextResponse.redirect(buildYouTubeAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

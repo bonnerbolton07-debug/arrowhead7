@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildDropboxAuthUrl, dropboxClientCreds } from '@/lib/cloud/dropbox';
-import { generateState, setStateCookie } from '@/lib/oauth/state';
+import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,8 +15,10 @@ export async function GET(request: NextRequest) {
     dropboxClientCreds();
     const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
-    await setStateCookie('dropbox', state, nextPath);
-    return NextResponse.redirect(buildDropboxAuthUrl(state));
+    const redirectUri = getRedirectUri('dropbox', request);
+    console.log('[oauth/dropbox/connect] redirect_uri:', redirectUri);
+    await setStateCookie('dropbox', state, nextPath, redirectUri);
+    return NextResponse.redirect(buildDropboxAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

@@ -8,7 +8,7 @@ import {
   exchangeYouTubeCode,
   fetchYouTubeChannel,
 } from '@/lib/distribute/youtube';
-import { readAndClearState, verifyState } from '@/lib/oauth/state';
+import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,8 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath } = await readAndClearState('youtube');
+  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+    await readAndClearState('youtube');
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -31,7 +32,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
-    const tokens = await exchangeYouTubeCode(code, 'youtube');
+    const redirectUri = storedRedirect ?? getRedirectUri('youtube', request);
+    console.log('[oauth/youtube/callback] redirect_uri:', redirectUri);
+    const tokens = await exchangeYouTubeCode(code, 'youtube', redirectUri);
     const channel = await fetchYouTubeChannel(tokens.access_token);
 
     await upsertChannel({

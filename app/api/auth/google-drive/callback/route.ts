@@ -8,7 +8,7 @@ import {
   exchangeGoogleCode,
   fetchGoogleUserInfo,
 } from '@/lib/cloud/google-drive';
-import { readAndClearState, verifyState } from '@/lib/oauth/state';
+import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,8 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath } = await readAndClearState('google-drive');
+  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+    await readAndClearState('google-drive');
 
   const fail = (msg: string) =>
     NextResponse.redirect(
@@ -32,7 +33,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
-    const tokens = await exchangeGoogleCode(code, 'google-drive');
+    // Reuse the EXACT redirect_uri sent at /authorize time. Google enforces
+    // a byte-for-byte match between authorize and token requests; falling
+    // back to a freshly-derived URI here is what produces a mismatch on
+    // preview deployments and custom domains.
+    const redirectUri = storedRedirect ?? getRedirectUri('google-drive', request);
+    console.log('[oauth/google-drive/callback] redirect_uri:', redirectUri);
+    const tokens = await exchangeGoogleCode(code, 'google-drive', redirectUri);
     const info = await fetchGoogleUserInfo(tokens.access_token);
 
     await upsertCloudConnection({

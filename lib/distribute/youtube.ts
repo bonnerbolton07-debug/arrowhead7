@@ -24,11 +24,12 @@ export { fetchGoogleUserInfo as fetchYouTubeUserInfo };
 const YT_API = 'https://www.googleapis.com/youtube/v3';
 const YT_UPLOAD = 'https://www.googleapis.com/upload/youtube/v3/videos';
 
-export function buildYouTubeAuthUrl(state: string): string {
+export function buildYouTubeAuthUrl(state: string, redirectUri: string): string {
   return buildGoogleAuthUrl({
     provider: 'youtube',
     scopes: YOUTUBE_SCOPES,
     state,
+    redirectUri,
   });
 }
 

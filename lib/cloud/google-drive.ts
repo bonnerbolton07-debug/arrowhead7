@@ -9,7 +9,6 @@ import {
   isTokenExpired,
   type OAuthTokens,
 } from '@/lib/oauth/store';
-import { getRedirectUri } from '@/lib/oauth/state';
 
 const GOOGLE_OAUTH = 'https://oauth2.googleapis.com/token';
 const GOOGLE_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -42,11 +41,14 @@ export function buildGoogleAuthUrl(opts: {
   provider: 'google-drive' | 'youtube';
   scopes: string[];
   state: string;
+  /** Redirect URI to register on /authorize — must match the URI used at
+   *  token-exchange time byte-for-byte (Google enforces this). */
+  redirectUri: string;
 }): string {
   const { clientId } = googleClientCreds();
   const params = new URLSearchParams({
     client_id: clientId,
-    redirect_uri: getRedirectUri(opts.provider),
+    redirect_uri: opts.redirectUri,
     response_type: 'code',
     scope: opts.scopes.join(' '),
     access_type: 'offline',
@@ -59,7 +61,8 @@ export function buildGoogleAuthUrl(opts: {
 
 export async function exchangeGoogleCode(
   code: string,
-  provider: 'google-drive' | 'youtube'
+  provider: 'google-drive' | 'youtube',
+  redirectUri: string
 ): Promise<OAuthTokens> {
   const { clientId, clientSecret } = googleClientCreds();
   const res = await fetch(GOOGLE_OAUTH, {
@@ -69,12 +72,22 @@ export async function exchangeGoogleCode(
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: getRedirectUri(provider),
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     }),
   });
   if (!res.ok) {
-    throw new Error(`Google token exchange failed: ${res.status} ${await res.text()}`);
+    const errorBody = await res.text();
+    // Surface redirect_uri_mismatch with the exact URI we sent — without
+    // this hint, the only thing the user sees on Google's side is "Error 400"
+    // and they have no way to know which URI to register.
+    if (/redirect_uri_mismatch|invalid_grant/i.test(errorBody)) {
+      throw new Error(
+        `Google rejected redirect_uri="${redirectUri}". Add this exact URI to ` +
+          `your Google Cloud Console OAuth client's "Authorized redirect URIs".`
+      );
+    }
+    throw new Error(`Google token exchange failed: ${res.status} ${errorBody}`);
   }
   return (await res.json()) as OAuthTokens;
 }

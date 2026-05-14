@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { exchangeDropboxCode, fetchDropboxAccount } from '@/lib/cloud/dropbox';
-import { readAndClearState, verifyState } from '@/lib/oauth/state';
+import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,8 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath } = await readAndClearState('dropbox');
+  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+    await readAndClearState('dropbox');
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -28,7 +29,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
-    const tokens = await exchangeDropboxCode(code);
+    const redirectUri = storedRedirect ?? getRedirectUri('dropbox', request);
+    console.log('[oauth/dropbox/callback] redirect_uri:', redirectUri);
+    const tokens = await exchangeDropboxCode(code, redirectUri);
     const account = await fetchDropboxAccount(tokens.access_token);
 
     await upsertCloudConnection({

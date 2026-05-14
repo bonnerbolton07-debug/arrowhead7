@@ -9,7 +9,6 @@ import {
   isTokenExpired,
   type OAuthTokens,
 } from '@/lib/oauth/store';
-import { getRedirectUri } from '@/lib/oauth/state';
 
 const DROPBOX_AUTH = 'https://www.dropbox.com/oauth2/authorize';
 const DROPBOX_TOKEN = 'https://api.dropboxapi.com/oauth2/token';
@@ -27,12 +26,12 @@ export function dropboxClientCreds(): { key: string; secret: string } {
   return { key, secret };
 }
 
-export function buildDropboxAuthUrl(state: string): string {
+export function buildDropboxAuthUrl(state: string, redirectUri: string): string {
   const { key } = dropboxClientCreds();
   const params = new URLSearchParams({
     client_id: key,
     response_type: 'code',
-    redirect_uri: getRedirectUri('dropbox'),
+    redirect_uri: redirectUri,
     state,
     token_access_type: 'offline',
     // files.content.read covers listing + downloading
@@ -41,7 +40,10 @@ export function buildDropboxAuthUrl(state: string): string {
   return `${DROPBOX_AUTH}?${params.toString()}`;
 }
 
-export async function exchangeDropboxCode(code: string): Promise<OAuthTokens> {
+export async function exchangeDropboxCode(
+  code: string,
+  redirectUri: string
+): Promise<OAuthTokens> {
   const { key, secret } = dropboxClientCreds();
   const res = await fetch(DROPBOX_TOKEN, {
     method: 'POST',
@@ -51,11 +53,18 @@ export async function exchangeDropboxCode(code: string): Promise<OAuthTokens> {
       grant_type: 'authorization_code',
       client_id: key,
       client_secret: secret,
-      redirect_uri: getRedirectUri('dropbox'),
+      redirect_uri: redirectUri,
     }),
   });
   if (!res.ok) {
-    throw new Error(`Dropbox token exchange failed: ${res.status} ${await res.text()}`);
+    const errorBody = await res.text();
+    if (/redirect_uri|invalid_grant/i.test(errorBody)) {
+      throw new Error(
+        `Dropbox rejected redirect_uri="${redirectUri}". Add this exact URI to ` +
+          `your Dropbox App Console "OAuth 2 redirect URIs".`
+      );
+    }
+    throw new Error(`Dropbox token exchange failed: ${res.status} ${errorBody}`);
   }
   return res.json();
 }
