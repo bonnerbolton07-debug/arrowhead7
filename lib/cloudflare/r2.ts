@@ -13,6 +13,8 @@ import {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListObjectsV2Command,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -231,3 +233,90 @@ export async function abortMultipartUpload(
  * TODO: Implement lifecycle rules to auto-delete processing files after 24h.
  * R2 supports lifecycle policies via the dashboard or API.
  */
+
+// ─── User Vault Keys ─────────────────────────────────────────────────────────
+// All persistent user content lives under `users/{uid}/vault/{folder}/...`.
+// `references/` and `footage/` are user-uploaded; `exports/` holds finished
+// renders that we copy out of Cloudflare Stream / Shotstack output.
+
+export type VaultFolder = 'references' | 'footage' | 'exports';
+
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
+}
+
+function randomSlug(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+export function generateVaultKey(
+  userId: string,
+  folder: VaultFolder,
+  filename: string
+): string {
+  const safe = sanitizeFilename(filename);
+  const slug = randomSlug();
+  // `references/<slug>_<name>.ext` keeps names readable while avoiding collisions
+  return `users/${userId}/vault/${folder}/${slug}_${safe}`;
+}
+
+export function parseVaultKey(
+  key: string
+): { userId: string; folder: VaultFolder; filename: string } | null {
+  const m = key.match(/^users\/([^/]+)\/vault\/(references|footage|exports)\/(.+)$/);
+  if (!m) return null;
+  return {
+    userId: m[1],
+    folder: m[2] as VaultFolder,
+    filename: m[3],
+  };
+}
+
+// ─── List & Head ─────────────────────────────────────────────────────────────
+
+export interface R2Object {
+  key: string;
+  size: number;
+  lastModified?: Date;
+}
+
+export async function listR2(prefix: string, max = 1000): Promise<R2Object[]> {
+  const client = getR2Client();
+  const out: R2Object[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({
+        Bucket: R2_BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: Math.min(1000, max - out.length),
+      })
+    );
+    for (const obj of res.Contents ?? []) {
+      if (obj.Key) {
+        out.push({
+          key: obj.Key,
+          size: typeof obj.Size === 'number' ? obj.Size : 0,
+          lastModified: obj.LastModified,
+        });
+        if (out.length >= max) break;
+      }
+    }
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (continuationToken && out.length < max);
+  return out;
+}
+
+export async function headR2(key: string): Promise<{ size: number; contentType?: string } | null> {
+  try {
+    const client = getR2Client();
+    const res = await client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    return {
+      size: typeof res.ContentLength === 'number' ? res.ContentLength : 0,
+      contentType: res.ContentType,
+    };
+  } catch {
+    return null;
+  }
+}

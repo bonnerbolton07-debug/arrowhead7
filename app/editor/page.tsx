@@ -20,6 +20,9 @@ import {
   type UploadProgress,
   type UploadResumeState,
 } from '@/lib/upload/client';
+import { VaultPicker } from '@/components/vault/VaultPicker';
+import { VaultIcon } from '@/components/ui/icons';
+import type { VaultFile } from '@/lib/vault';
 
 type Step = 'reference' | 'footage' | 'style' | 'configure' | 'render';
 
@@ -168,6 +171,11 @@ export default function EditorPage() {
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
+  const [exportVaultFileId, setExportVaultFileId] = useState<string | null>(null);
+
+  // Vault pickers
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
+  const [footagePickerOpen, setFootagePickerOpen] = useState(false);
 
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
@@ -327,6 +335,23 @@ export default function EditorPage() {
     setPendingUrl('');
   }, [pendingUrl]);
 
+  const addReferencesFromVault = useCallback((picked: VaultFile[]) => {
+    setReferenceError(null);
+    setReferences((prev) => [
+      ...prev,
+      ...picked
+        .filter((f) => f.kind === 'video' || f.kind === 'image')
+        .map<ReferenceItem>((f) => ({
+          id: makeId(),
+          kind: f.kind === 'image' ? 'image' : 'video',
+          source: 'upload',
+          url: f.r2_key,
+          label: f.filename,
+          status: 'ready',
+        })),
+    ]);
+  }, []);
+
   // ─── Step 2: Footage Upload ─────────────────────────────────────────────
   const runFootageUpload = useCallback(async (file: File, resumeFrom?: UploadResumeState) => {
     setFootageError(null);
@@ -437,6 +462,61 @@ export default function EditorPage() {
         }
       } catch {
         // Non-fatal — render route falls back to its own row creation.
+      }
+    },
+    [readyRefs]
+  );
+
+  /**
+   * Vault picker handler — same idea as `acceptCloudImport`, but the source
+   * is already a registered `vault_files` row so we have its R2 key and
+   * metadata in hand without a fresh round-trip.
+   */
+  const pickVaultFootage = useCallback(
+    async (picked: VaultFile[]) => {
+      const file = picked.find((f) => f.kind === 'video');
+      if (!file) {
+        setFootageError('Pick a video file for footage.');
+        return;
+      }
+      const newEditId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : Math.random().toString(36).slice(2);
+      try {
+        const synthetic = new File([new Uint8Array(0)], file.filename, {
+          type: file.content_type,
+        });
+        setFootageFile(synthetic);
+      } catch {
+        setFootageFile(null);
+      }
+      setFootageError(null);
+      setFootageR2Key(file.r2_key);
+      setEditId(newEditId);
+      setFootageUploadState('done');
+      setFootageProgress({
+        pct: 100,
+        loadedBytes: file.size_bytes,
+        totalBytes: file.size_bytes,
+        mode: 'single',
+      });
+
+      try {
+        const supabase = getClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from('edits').upsert({
+            id: newEditId,
+            user_id: user.id,
+            title: file.filename.replace(/\.[^.]+$/, ''),
+            status: 'draft',
+            source_video_url: file.r2_key,
+            reference_urls: readyRefs.map((r) => r.url),
+          });
+        }
+      } catch {
+        // Non-fatal
       }
     },
     [readyRefs]
@@ -571,6 +651,7 @@ export default function EditorPage() {
       if (data.status === 'completed') {
         setRenderState('completed');
         setOutputUrl(data.playbackUrl || null);
+        setExportVaultFileId(data.vaultFileId || null);
         stopPolling();
         return;
       }
@@ -802,6 +883,31 @@ export default function EditorPage() {
               Drop in 3&ndash;4 reference videos and a couple mood-board images. A7 blends them into one Style DNA.
             </p>
 
+            <button
+              type="button"
+              onClick={() => setReferencePickerOpen(true)}
+              className="w-full mb-4 px-5 py-4 rounded-xl flex items-center gap-4 text-left transition-all hover:scale-[1.005]"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+                border: '1px solid rgba(45,212,191,0.28)',
+                boxShadow: '0 0 18px rgba(45,212,191,0.12)',
+              }}
+            >
+              <VaultIcon size={22} gradient="teal" />
+              <div className="flex-1">
+                <div className="font-semibold text-sm text-a7-text">Import from your vault</div>
+                <div className="text-xs text-a7-text/50">
+                  Your references and mood boards are already there. Pick and add.
+                </div>
+              </div>
+              <span className="text-grad-teal text-sm">→</span>
+            </button>
+
+            <div className="text-[11px] uppercase tracking-wider text-a7-text/40 font-mono mb-2 text-center">
+              or upload directly
+            </div>
+
             <ReferenceDropZone
               onFiles={(files) => files.forEach(uploadReferenceFile)}
             />
@@ -874,10 +980,37 @@ export default function EditorPage() {
 
         {step === 'footage' && (
           <div className="w-full max-w-xl">
-            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Upload Your Footage</h2>
+            <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">
+              Add Your Footage
+            </h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Drop in the raw video you want edited — or pull it server-side from your cloud storage.
+              Pick the raw clip you want edited — from your vault, your device, or the cloud.
             </p>
+
+            <button
+              type="button"
+              onClick={() => setFootagePickerOpen(true)}
+              className="w-full mb-4 px-5 py-4 rounded-xl flex items-center gap-4 text-left transition-all hover:scale-[1.005]"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+                border: '1px solid rgba(45,212,191,0.28)',
+                boxShadow: '0 0 18px rgba(45,212,191,0.12)',
+              }}
+            >
+              <VaultIcon size={22} gradient="teal" />
+              <div className="flex-1">
+                <div className="font-semibold text-sm text-a7-text">Import from your vault</div>
+                <div className="text-xs text-a7-text/50">
+                  Use raw footage you already staged in /footage.
+                </div>
+              </div>
+              <span className="text-grad-teal text-sm">→</span>
+            </button>
+
+            <div className="text-[11px] uppercase tracking-wider text-a7-text/40 font-mono mb-2 text-center">
+              or upload directly
+            </div>
 
             <DropZone
               accept="video/*"
@@ -889,6 +1022,11 @@ export default function EditorPage() {
               canResume={!!footageResumeState}
               onRetry={retryFootageUpload}
             />
+
+            <p className="mt-3 text-[11px] text-a7-text/30 text-center">
+              Want to pull from Google Drive or Dropbox? Open the vault and import,
+              then return here to pick it up.
+            </p>
 
             {footageError && (
               <p className="mt-3 text-sm" style={{ color: '#E8B06A' }}>{footageError}</p>
@@ -1223,22 +1361,22 @@ export default function EditorPage() {
                 <PostRenderPlan
                   preferredPlatform={strategyBrief?.platform as StrategyPlatform | undefined}
                 />
-                <div className="flex gap-3 mt-6">
+                <ExportActions
+                  outputUrl={outputUrl}
+                  vaultFileId={exportVaultFileId}
+                />
+                <div className="flex gap-3 mt-3">
                   <a
-                    href={outputUrl || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={classNames(
-                      'flex-1 py-3 rounded-md font-medium text-sm transition-all text-center',
-                      !outputUrl && 'opacity-50 pointer-events-none'
-                    )}
+                    href="/vault"
+                    className="flex-1 py-3 rounded-md font-medium text-sm transition-all text-center"
                     style={{
-                      background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
-                      border: '1px solid rgba(245,240,232,0.06)',
-                      color: 'rgba(245,240,232,0.5)',
+                      background:
+                        'linear-gradient(135deg, rgba(184,115,51,0.1), rgba(184,115,51,0.03))',
+                      border: '1px solid rgba(184,115,51,0.25)',
+                      color: '#E8B06A',
                     }}
                   >
-                    Open
+                    View in Vault
                   </a>
                   <a
                     href="/dashboard"
@@ -1289,11 +1427,113 @@ export default function EditorPage() {
           </div>
         )}
       </main>
+
+      <VaultPicker
+        open={referencePickerOpen}
+        defaultFolder="references"
+        allowedKinds={['video', 'image']}
+        multiple
+        onClose={() => setReferencePickerOpen(false)}
+        onSelect={(picked) => addReferencesFromVault(picked)}
+      />
+      <VaultPicker
+        open={footagePickerOpen}
+        defaultFolder="footage"
+        allowedKinds={['video']}
+        multiple={false}
+        onClose={() => setFootagePickerOpen(false)}
+        onSelect={(picked) => void pickVaultFootage(picked)}
+      />
     </div>
   );
 }
 
 // ─── Subcomponents ────────────────────────────────────────────────────────
+
+function ExportActions({
+  outputUrl,
+  vaultFileId,
+}: {
+  outputUrl: string | null;
+  vaultFileId: string | null;
+}) {
+  const [shareBusy, setShareBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+
+  const doShare = async () => {
+    if (!vaultFileId && !outputUrl) return;
+    setShareBusy(true);
+    try {
+      let link = outputUrl ?? '';
+      if (vaultFileId) {
+        const res = await fetch(`/api/vault/files/${vaultFileId}`);
+        if (res.ok) {
+          const data = (await res.json()) as { downloadUrl?: string };
+          if (data.downloadUrl) link = data.downloadUrl;
+        }
+      }
+      if (!link) return;
+      try {
+        await navigator.clipboard.writeText(link);
+        alert('Share link copied to clipboard.');
+      } catch {
+        window.prompt('Share link:', link);
+      }
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const doDownload = async () => {
+    setDownloadBusy(true);
+    try {
+      if (vaultFileId) {
+        const res = await fetch(`/api/vault/files/${vaultFileId}`);
+        if (res.ok) {
+          const data = (await res.json()) as { downloadUrl?: string };
+          if (data.downloadUrl) {
+            window.open(data.downloadUrl, '_blank', 'noopener,noreferrer');
+            return;
+          }
+        }
+      }
+      if (outputUrl) window.open(outputUrl, '_blank', 'noopener,noreferrer');
+    } finally {
+      setDownloadBusy(false);
+    }
+  };
+
+  const disabled = !outputUrl && !vaultFileId;
+
+  return (
+    <div className="flex gap-3 mt-6">
+      <button
+        onClick={doDownload}
+        disabled={disabled || downloadBusy}
+        className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
+        style={{
+          background: 'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+          border: '1px solid rgba(45,212,191,0.25)',
+          color: '#5BE8D5',
+        }}
+      >
+        {downloadBusy ? 'Preparing…' : 'Download'}
+      </button>
+      <button
+        onClick={doShare}
+        disabled={disabled || shareBusy}
+        className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
+        style={{
+          background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+          border: '1px solid rgba(245,240,232,0.08)',
+          color: 'rgba(245,240,232,0.7)',
+        }}
+      >
+        {shareBusy ? 'Copying…' : 'Share'}
+      </button>
+    </div>
+  );
+}
 
 function DropZone({
   file,

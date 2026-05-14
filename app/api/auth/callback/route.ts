@@ -9,8 +9,10 @@ import { createServerSupabaseClient, isSupabaseConfigured } from '@/lib/supabase
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const nextParam = searchParams.get('next') ?? '/dashboard';
-  const next = nextParam.startsWith('/') ? nextParam : '/dashboard';
+  // Default new-confirmation links to /onboarding; the middleware will
+  // forward existing users on to /dashboard if they've already finished.
+  const nextParam = searchParams.get('next') ?? '/onboarding';
+  const next = nextParam.startsWith('/') ? nextParam : '/onboarding';
 
   if (!isSupabaseConfigured()) {
     return NextResponse.redirect(`${origin}/auth/login?error=auth_failed`);

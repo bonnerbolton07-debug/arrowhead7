@@ -1,22 +1,23 @@
 // =============================================================================
-// Arrowhead 7 — iCloud Drive: Import from share link
+// Arrowhead 7 — iCloud Drive: Import from share link into vault
 // =============================================================================
 // Accepts a public iCloud Drive share URL, resolves it through Apple's
-// public-records API, streams the file into R2, and records a virtual
-// "connection" so the iCloud card on the Vault page shows as connected.
-//
-// The bytes are piped through the S3 multipart uploader in lib/cloud/pull.ts
-// so the Lambda never buffers the full file — important because Apple's
-// download URLs are short-lived (~5 minutes) and large videos would otherwise
-// hit memory limits.
+// public-records API, streams the file into the user's vault via the
+// multipart pull pipeline, and registers a `vault_files` row.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { downloadIcloudShare, isIcloudShareUrl } from '@/lib/cloud/icloud';
-import { streamToR2, sanitizeFilename } from '@/lib/cloud/pull';
+import { streamToR2, sanitizeFilename, mimeFromName } from '@/lib/cloud/pull';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { encryptToken } from '@/lib/crypto/tokens';
-import { v4 as uuidv4 } from 'uuid';
+import {
+  reserveVaultKey,
+  registerVaultFile,
+  kindForContentType,
+  defaultFolderForKind,
+  type VaultFolder,
+} from '@/lib/vault';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,9 +26,11 @@ export const maxDuration = 300;
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
-    const body = await request.json();
-    const shareUrl: string | undefined = body.shareUrl;
-    const editId: string = body.editId || uuidv4();
+    const body = (await request.json()) as {
+      shareUrl?: string;
+      folder?: VaultFolder;
+    };
+    const shareUrl = body.shareUrl;
 
     if (!shareUrl || !isIcloudShareUrl(shareUrl)) {
       return NextResponse.json(
@@ -38,15 +41,29 @@ export async function POST(request: NextRequest) {
 
     const { stream, contentType, name } = await downloadIcloudShare(shareUrl);
     const filename = sanitizeFilename(name);
-    const key = `sources/${user.id}/${editId}/${filename}`;
+    const resolvedContentType = contentType || mimeFromName(filename) || 'application/octet-stream';
+    const kind = kindForContentType(resolvedContentType);
+    const folder: VaultFolder = body.folder ?? defaultFolderForKind(kind);
+    const r2Key = reserveVaultKey(user.id, folder, filename);
+
     const out = await streamToR2({
-      key,
-      contentType: contentType || 'application/octet-stream',
+      key: r2Key,
+      contentType: resolvedContentType,
       stream,
     });
 
-    // Record a virtual "connection" so the iCloud tile flips to connected
-    // and the rest of the vault UI lists the user's recent iCloud imports.
+    const file = await registerVaultFile({
+      userId: user.id,
+      r2Key,
+      filename,
+      contentType: out.contentType,
+      sizeBytes: out.bytes,
+      folder,
+      source: 'icloud',
+      externalUrl: shareUrl,
+    });
+
+    // Record a virtual "connection" so the iCloud tile flips to connected.
     try {
       const supabase = await createServerSupabaseClient();
       await supabase.from('cloud_connections').upsert(
@@ -56,9 +73,6 @@ export async function POST(request: NextRequest) {
           account_id: 'share-link',
           account_email: null,
           account_name: 'Share-link mode',
-          // No OAuth token to store, but the column is NOT NULL — encrypt a
-          // sentinel so the schema invariant + future decryptToken() reads
-          // both still succeed.
           access_token_encrypted: encryptToken('share-link'),
           connection_status: 'connected',
           metadata: { mode: 'share-link', last_url: shareUrl },
@@ -70,13 +84,7 @@ export async function POST(request: NextRequest) {
       // Non-fatal — connection row is cosmetic.
     }
 
-    return NextResponse.json({
-      editId,
-      key,
-      name: filename,
-      size: out.bytes,
-      mimeType: out.contentType,
-    });
+    return NextResponse.json({ key: r2Key, file });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

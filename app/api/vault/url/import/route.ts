@@ -1,19 +1,22 @@
 // =============================================================================
-// Arrowhead 7 — Generic URL Importer
+// Arrowhead 7 — Generic URL Importer into vault
 // =============================================================================
-// Pull any publicly-reachable HTTPS direct download URL into R2. Used by:
+// Pull any publicly-reachable HTTPS direct download URL into the user's vault.
+// Used by:
 //   • iCloud Drive direct cvws.icloud-content.com URLs
-//   • Any other "Anyone with the link" cloud share that resolves to an MP4
+//   • Any other "Anyone with the link" cloud share that resolves to media
 //   • Internal tooling that already has a signed URL handy
-//
-// YouTube source ingestion: YouTube does not let third parties stream user
-// videos via the public API; users must export to Drive first. This route is
-// a generic fallback — paste a direct media URL and we pull it.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { pullUrlToR2, sanitizeFilename, mimeFromName } from '@/lib/cloud/pull';
-import { v4 as uuidv4 } from 'uuid';
+import {
+  reserveVaultKey,
+  registerVaultFile,
+  kindForContentType,
+  defaultFolderForKind,
+  type VaultFolder,
+} from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -31,10 +34,12 @@ function fileFromUrl(input: string): string {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
-    const body = await request.json();
-    const sourceUrl: string | undefined = body.url;
-    const editId: string = body.editId || uuidv4();
-    const desiredName: string | undefined = body.name;
+    const body = (await request.json()) as {
+      url?: string;
+      name?: string;
+      folder?: VaultFolder;
+    };
+    const sourceUrl = body.url;
 
     if (!sourceUrl || !/^https?:\/\//i.test(sourceUrl)) {
       return NextResponse.json(
@@ -43,27 +48,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const filename = sanitizeFilename(desiredName || fileFromUrl(sourceUrl));
-    const key = `sources/${user.id}/${editId}/${filename}`;
+    const filename = sanitizeFilename(body.name || fileFromUrl(sourceUrl));
+    const fallbackContentType = mimeFromName(filename);
+    const kind = kindForContentType(fallbackContentType);
+    const folder: VaultFolder = body.folder ?? defaultFolderForKind(kind);
+    const r2Key = reserveVaultKey(user.id, folder, filename);
 
     const out = await pullUrlToR2({
       url: sourceUrl,
-      key,
-      fallbackContentType: mimeFromName(filename),
+      key: r2Key,
+      fallbackContentType,
     });
 
-    if (!out.contentType.startsWith('video/') && !out.contentType.startsWith('image/')) {
-      // Don't reject — surface the type so the caller can decide. The editor's
-      // footage step accepts video MIME types only; references accept either.
-    }
-
-    return NextResponse.json({
-      editId,
-      key,
-      name: filename,
-      size: out.bytes,
-      mimeType: out.contentType,
+    const file = await registerVaultFile({
+      userId: user.id,
+      r2Key,
+      filename,
+      contentType: out.contentType,
+      sizeBytes: out.bytes,
+      folder,
+      source: 'url',
+      externalUrl: sourceUrl,
     });
+
+    return NextResponse.json({ key: r2Key, file });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

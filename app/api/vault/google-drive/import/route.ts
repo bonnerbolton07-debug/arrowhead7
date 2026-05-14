@@ -1,9 +1,9 @@
 // =============================================================================
-// Arrowhead 7 — Google Drive: Import
+// Arrowhead 7 — Google Drive: import into vault
 // =============================================================================
-// Streams a Drive video into R2 under sources/<userId>/<editId>/<name>. The
-// body is piped through the S3 multipart uploader (lib/cloud/pull.ts) so the
-// Lambda never holds more than ~8 MiB at a time.
+// Streams a Drive file into the user's vault under
+// `users/{uid}/vault/{folder}/...` via the multipart pull pipeline (so the
+// Lambda never buffers the full file) and registers it in vault_files.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
@@ -12,8 +12,14 @@ import {
   downloadDriveFile,
   getDriveFile,
 } from '@/lib/cloud/google-drive';
-import { streamToR2, sanitizeFilename } from '@/lib/cloud/pull';
-import { v4 as uuidv4 } from 'uuid';
+import { streamToR2 } from '@/lib/cloud/pull';
+import {
+  reserveVaultKey,
+  registerVaultFile,
+  kindForContentType,
+  defaultFolderForKind,
+  type VaultFolder,
+} from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -21,44 +27,42 @@ export const maxDuration = 300;
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
-    const body = await request.json();
-    const fileId: string | undefined = body.fileId;
-    const editId: string = body.editId || uuidv4();
-
+    const body = (await request.json()) as {
+      fileId?: string;
+      folder?: VaultFolder;
+    };
+    const fileId = body.fileId;
     if (!fileId) {
       return NextResponse.json({ error: 'Missing fileId' }, { status: 400 });
     }
 
     const { accessToken } = await getValidDriveAccessToken(user.id);
-
     const meta = await getDriveFile({ accessToken, fileId });
-    if (!meta.mimeType.startsWith('video/')) {
-      return NextResponse.json(
-        { error: 'Selected file is not a video' },
-        { status: 400 }
-      );
-    }
 
-    const name = sanitizeFilename(meta.name);
-    const key = `sources/${user.id}/${editId}/${name}`;
-    const { stream, contentType } = await downloadDriveFile({
-      accessToken,
-      fileId,
-    });
+    const fallbackContentType = meta.mimeType || 'application/octet-stream';
+    const kind = kindForContentType(fallbackContentType);
+    const folder: VaultFolder = body.folder ?? defaultFolderForKind(kind);
+    const r2Key = reserveVaultKey(user.id, folder, meta.name);
 
+    const { stream, contentType } = await downloadDriveFile({ accessToken, fileId });
     const out = await streamToR2({
-      key,
-      contentType: contentType || meta.mimeType,
+      key: r2Key,
+      contentType: contentType || fallbackContentType,
       stream,
     });
 
-    return NextResponse.json({
-      editId,
-      key,
-      name: meta.name,
-      size: out.bytes,
-      mimeType: out.contentType,
+    const file = await registerVaultFile({
+      userId: user.id,
+      r2Key,
+      filename: meta.name,
+      contentType: out.contentType,
+      sizeBytes: out.bytes,
+      folder,
+      source: 'google_drive',
+      metadata: { drive_file_id: fileId },
     });
+
+    return NextResponse.json({ key: r2Key, file });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

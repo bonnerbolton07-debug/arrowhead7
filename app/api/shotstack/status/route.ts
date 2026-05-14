@@ -8,6 +8,8 @@ import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getRenderStatus } from '@/lib/shotstack/client';
 import { uploadFromUrl } from '@/lib/cloudflare/stream';
+import { uploadToR2 } from '@/lib/cloudflare/r2';
+import { reserveVaultKey, registerVaultFile } from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,13 +47,59 @@ export async function GET(request: NextRequest) {
     // Poll Shotstack
     const shotstackStatus = await getRenderStatus(job.shotstack_render_id);
 
-    // If Shotstack is done, upload to Cloudflare Stream
+    // If Shotstack is done, fan-out the output to both Cloudflare Stream
+    // (for playback) and the user's vault `/exports` folder on R2.
     if (shotstackStatus.status === 'done' && shotstackStatus.url) {
-      // Upload rendered video to Cloudflare Stream
+      // Upload rendered video to Cloudflare Stream for playback.
       const streamResult = await uploadFromUrl(shotstackStatus.url, {
         name: `edit-${job.edit_id}`,
         editId: job.edit_id,
       });
+
+      // Copy to the user's vault `/exports` folder. We do this best-effort —
+      // failure here shouldn't block the success response, the user can still
+      // download via the Stream playback URL.
+      let vaultFileId: string | null = null;
+      try {
+        const renderedRes = await fetch(shotstackStatus.url);
+        if (renderedRes.ok && renderedRes.body) {
+          const contentType =
+            renderedRes.headers.get('content-type')?.split(';')[0].trim() ||
+            'video/mp4';
+          const ext = contentType.includes('webm') ? 'webm' : 'mp4';
+          const filename = `edit-${String(job.edit_id).slice(0, 8)}.${ext}`;
+          const r2Key = reserveVaultKey(user.id, 'exports', filename);
+
+          const reader = renderedRes.body.getReader();
+          const chunks: Uint8Array[] = [];
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) chunks.push(value);
+          }
+          const buf = Buffer.concat(chunks);
+          await uploadToR2(r2Key, buf, contentType);
+
+          const file = await registerVaultFile({
+            userId: user.id,
+            r2Key,
+            filename,
+            contentType,
+            sizeBytes: buf.length,
+            folder: 'exports',
+            source: 'render',
+            editId: job.edit_id,
+            thumbnailUrl: streamResult.thumbnailUrl,
+            metadata: {
+              shotstack_render_id: job.shotstack_render_id,
+              stream_uid: streamResult.uid,
+            },
+          });
+          vaultFileId = file?.id ?? null;
+        }
+      } catch (err) {
+        console.error('Vault export copy failed (non-fatal)', err);
+      }
 
       // Update render job
       await supabase
@@ -80,6 +128,7 @@ export async function GET(request: NextRequest) {
         progress: 100,
         playbackUrl: streamResult.playbackUrl,
         thumbnailUrl: streamResult.thumbnailUrl,
+        vaultFileId,
       });
     }
 

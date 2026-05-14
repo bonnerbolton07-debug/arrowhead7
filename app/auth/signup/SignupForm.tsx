@@ -40,7 +40,7 @@ export default function SignupForm() {
         email,
         password,
         options: {
-          emailRedirectTo: `${origin}/api/auth/callback?next=/dashboard`,
+          emailRedirectTo: `${origin}/api/auth/callback?next=/onboarding`,
         },
       });
       if (error) {
@@ -48,10 +48,10 @@ export default function SignupForm() {
         setSubmitting(false);
         return;
       }
-      // If email confirmation is OFF, session exists -> straight to dashboard.
+      // If email confirmation is OFF, session exists -> straight to onboarding.
       // If email confirmation is ON, session is null -> show confirm message.
       if (data.session) {
-        router.push('/dashboard');
+        router.push('/onboarding');
         router.refresh();
         return;
       }
