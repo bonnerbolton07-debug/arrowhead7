@@ -157,11 +157,16 @@ async function analyzeSingleReference(
   // analysis so the editor still gets a usable StyleDNA. Local dev without the
   // installer hits this path; production should always have the binary.
   if (!(await isFfmpegAvailable())) {
+    console.log('[style-dna] FFmpeg not available, using heuristic fallback');
     return heuristicFallback(ref);
   }
 
+  // Wrap the full pipeline — if anything fails (binary crash, download
+  // timeout, OOM, ffprobe ENOENT, etc.) degrade gracefully to heuristic
+  // so the user always gets a result instead of a 500 error.
+  try {
   if (ref.type === 'image') {
-    return analyzeImageReference(ref);
+    return await analyzeImageReference(ref);
   }
 
   const resolved = await resolveSource(ref.url);
@@ -212,6 +217,10 @@ async function analyzeSingleReference(
     };
   } finally {
     if (resolved.ephemeral) await unlinkQuiet(resolved.path);
+  }
+  } catch (pipelineErr) {
+    console.warn('[style-dna] Pipeline failed, using heuristic:', pipelineErr instanceof Error ? pipelineErr.message : pipelineErr);
+    return heuristicFallback(ref);
   }
 }
 

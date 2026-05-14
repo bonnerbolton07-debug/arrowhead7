@@ -350,11 +350,24 @@ export default function EditorPage() {
         // Weight each reference equally; videos drive temporal fields, images
         // contribute to color. (See analyzer.ts blendAnalyses for details.)
         const payload = readyRefs.map((r) => ({ url: r.url, type: r.kind }));
-        const res = await fetch('/api/style-dna/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ references: payload }),
-        });
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), 70_000);
+        let res: Response;
+        try {
+          res = await fetch('/api/style-dna/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ references: payload }),
+            signal: controller.signal,
+          });
+        } catch (fetchErr: unknown) {
+          clearTimeout(fetchTimeout);
+          if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+            throw new Error('Style DNA analysis timed out. Please try a shorter video or upload a smaller file.');
+          }
+          throw fetchErr;
+        }
+        clearTimeout(fetchTimeout);
         clearInterval(stageTimer);
         if (cancelled) return;
         if (!res.ok) {

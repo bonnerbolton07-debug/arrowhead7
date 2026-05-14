@@ -62,6 +62,14 @@ export async function resolveSource(reference: string): Promise<ResolvedSource> 
   if (looksLikeUrl(reference)) {
     const platform = detectPlatform(reference);
     if (platform && platform !== 'other') {
+      // Social URLs require yt-dlp which isn't available on serverless.
+      // Check upfront and give a clear user-facing error.
+      if (!(await isYtdlpAvailable())) {
+        const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
+        throw new Error(
+          `${platformLabel} URLs can't be analyzed directly. Save the video to your device and upload the file instead.`
+        );
+      }
       return downloadSocial(reference);
     }
     return downloadToTmp(reference, ext);
@@ -110,6 +118,25 @@ async function downloadToTmp(url: string, ext: string = 'mp4'): Promise<Resolved
   return { path: dest, ephemeral: true };
 }
 
+/** Quick check whether yt-dlp is reachable (cached after first call). */
+let _ytdlpChecked: boolean | null = null;
+async function isYtdlpAvailable(): Promise<boolean> {
+  if (_ytdlpChecked !== null) return _ytdlpChecked;
+  const bin = process.env.YTDLP_PATH || 'yt-dlp';
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(bin, ['--version'], { stdio: 'ignore' });
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, 3_000);
+      child.on('error', (err) => { clearTimeout(timer); reject(err); });
+      child.on('close', (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`exit ${code}`)); });
+    });
+    _ytdlpChecked = true;
+  } catch {
+    _ytdlpChecked = false;
+  }
+  return _ytdlpChecked;
+}
+
 async function downloadSocial(url: string): Promise<ResolvedSource> {
   const ytdlp = process.env.YTDLP_PATH || 'yt-dlp';
   const dest = path.join(tmpdir(), `${TMP_PREFIX}${randomUUID()}.mp4`);
@@ -125,8 +152,8 @@ async function downloadSocial(url: string): Promise<ResolvedSource> {
   ];
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ytdlp, args, { stdio: 'ignore' });
-    child.on('error', (err) =>
-      reject(new Error(`Social URL fetch requires yt-dlp (not found: ${err.message}). Upload the file directly instead.`))
+    child.on('error', () =>
+      reject(new Error('Social media URLs can\'t be analyzed directly. Save the video to your device and upload the file instead.'))
     );
     child.on('close', (code) =>
       code === 0 ? resolve() : reject(new Error(`yt-dlp exited ${code} for ${url}`))
