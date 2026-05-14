@@ -9,7 +9,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { encryptToken, decryptToken } from '@/lib/crypto/tokens';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export type CloudProvider = 'google_drive' | 'dropbox' | 'onedrive' | 'box';
+export type CloudProvider = 'google_drive' | 'dropbox' | 'onedrive' | 'box' | 'icloud';
 export type PublishingPlatform =
   | 'youtube'
   | 'tiktok'

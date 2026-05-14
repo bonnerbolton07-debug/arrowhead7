@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/icons';
 import { TIER_LIMITS, type SubscriptionTier } from '@/types';
 import { VaultBrowser } from './VaultBrowser';
+import { IcloudShareCard } from './IcloudShareCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,7 +57,7 @@ const PROVIDERS: {
   {
     id: 'icloud',
     name: 'iCloud Drive',
-    description: 'Browse footage from your Apple devices.',
+    description: 'Import via public share link from the iCloud Files app.',
     Icon: ICloudIcon,
   },
 ];
@@ -184,6 +185,15 @@ export default async function VaultPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {PROVIDERS.map((p) => {
               const existing = connections.find((c) => c.provider === p.id);
+              if (p.id === 'icloud') {
+                return (
+                  <IcloudShareCard
+                    key={p.id}
+                    connected={!!existing}
+                    connectedAccount={existing?.account_name ?? existing?.account_email ?? null}
+                  />
+                );
+              }
               return (
                 <ProviderCard key={p.id} provider={p} connection={existing} />
               );
