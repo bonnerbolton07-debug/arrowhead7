@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { FilmIcon, DnaIcon, ClockIcon, SearchIcon } from '@/components/ui/icons';
+import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import { FilmIcon, DnaIcon, ClockIcon, SearchIcon, TrashIcon } from '@/components/ui/icons';
 import type { EditListRow } from './types';
 import type { EditStatus } from '@/types';
 
@@ -28,10 +29,32 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function EditsTable({ edits }: { edits: EditListRow[] }) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [styleFilter, setStyleFilter] = useState<string>('all');
   const [sort, setSort] = useState<SortKey>('newest');
   const [query, setQuery] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function deleteEdit(id: string, title: string) {
+    if (!confirm(`Delete this draft? This can't be undone.`)) return;
+    setBusyId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/edits/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? 'Delete failed');
+      }
+      startTransition(() => router.refresh());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete');
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const styles = useMemo(() => {
     const set = new Map<string, string>();
@@ -74,6 +97,19 @@ export function EditsTable({ edits }: { edits: EditListRow[] }) {
 
   return (
     <div>
+      {error && (
+        <div
+          className="mb-4 px-4 py-3 rounded-md text-sm"
+          style={{
+            background: 'linear-gradient(135deg, rgba(239,68,68,0.08), rgba(239,68,68,0.02))',
+            border: '1px solid rgba(239,68,68,0.25)',
+            color: '#F87171',
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       {/* Filter bar */}
       <div
         className="rounded-lg p-3 mb-5 flex flex-col lg:flex-row gap-3 items-stretch lg:items-center"
@@ -139,7 +175,12 @@ export function EditsTable({ edits }: { edits: EditListRow[] }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((e) => (
-            <EditCard key={e.id} edit={e} />
+            <EditCard
+              key={e.id}
+              edit={e}
+              onDelete={() => deleteEdit(e.id, e.title)}
+              busy={busyId === e.id}
+            />
           ))}
         </div>
       )}
@@ -151,7 +192,15 @@ export function EditsTable({ edits }: { edits: EditListRow[] }) {
   );
 }
 
-function EditCard({ edit }: { edit: EditListRow }) {
+function EditCard({
+  edit,
+  onDelete,
+  busy,
+}: {
+  edit: EditListRow;
+  onDelete: () => void;
+  busy: boolean;
+}) {
   const color = STATUS_COLORS[edit.status] ?? '#F5F0E8';
   const isActionable = edit.status === 'completed' && edit.output_video_url;
   const href = isActionable
@@ -175,6 +224,25 @@ function EditCard({ edit }: { edit: EditListRow }) {
           background: `linear-gradient(90deg, ${color}40, transparent)`,
         }}
       />
+
+      {/* Delete button — shown on hover, positioned above the link */}
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onDelete();
+        }}
+        disabled={busy}
+        className="absolute top-2 right-2 z-10 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+        style={{
+          background: 'rgba(239,68,68,0.12)',
+          border: '1px solid rgba(239,68,68,0.25)',
+        }}
+        aria-label="Delete edit"
+      >
+        <TrashIcon size={12} gradient="copper" />
+      </button>
+
       <div
         className="aspect-video flex items-center justify-center relative overflow-hidden"
         style={{
