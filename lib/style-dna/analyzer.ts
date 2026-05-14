@@ -48,6 +48,8 @@ import {
 export interface AnalyzeReferenceInput {
   /** R2 key, presigned URL, HTTPS URL, or social-media URL */
   url: string;
+  /** 'video' (default) drives the full DNA; 'image' contributes color/framing only. */
+  type?: 'video' | 'image';
   platform?: StyleReference['platform'];
   /** Blend weight when multiple references are provided. Optional. */
   weight?: number;
@@ -89,6 +91,7 @@ export async function analyzeReferenceVideos(
 
   const styleRefs: StyleReference[] = references.map((ref) => ({
     source_type: looksLikeUrl(ref.url) && detectPlatform(ref.url) ? 'url' : 'upload',
+    type: ref.type ?? inferReferenceType(ref.url),
     url: ref.url,
     platform: ref.platform ?? detectPlatform(ref.url) ?? undefined,
     weight: ref.weight ?? 1 / references.length,
@@ -104,6 +107,16 @@ export async function analyzeReferenceVideos(
     confidence_score: composite.confidence,
     ...composite.dna,
   };
+}
+
+/** Infer the reference media type from its URL/key. Defaults to 'video'. */
+function inferReferenceType(url: string): 'video' | 'image' {
+  const lower = url.toLowerCase().split('?')[0];
+  if (/\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/.test(lower)) return 'image';
+  if (lower.includes('/references/') && /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)/.test(lower)) {
+    return 'image';
+  }
+  return 'video';
 }
 
 /** Convenience wrapper for the common one-reference case. */
@@ -145,6 +158,10 @@ async function analyzeSingleReference(
   // installer hits this path; production should always have the binary.
   if (!(await isFfmpegAvailable())) {
     return heuristicFallback(ref);
+  }
+
+  if (ref.type === 'image') {
+    return analyzeImageReference(ref);
   }
 
   const resolved = await resolveSource(ref.url);
@@ -192,6 +209,107 @@ async function analyzeSingleReference(
       audio,
       frames,
       rawCuts: scenes.cuts,
+    };
+  } finally {
+    if (resolved.ephemeral) await unlinkQuiet(resolved.path);
+  }
+}
+
+/**
+ * Analyse a still-image reference. Images contribute only to color and framing
+ * (the visual half of the DNA). All temporal fields — cuts, pacing, energy
+ * arc, audio sync, motion — get neutral defaults and are expected to be filled
+ * in by the video references in the blend. The blend step gives image
+ * references weight=0 on the temporal fields so they don't drag the rhythm
+ * toward "frozen". See `blendAnalyses` below.
+ */
+async function analyzeImageReference(ref: StyleReference): Promise<SingleAnalysisResult> {
+  const resolved = await resolveSource(ref.url);
+  try {
+    // sampleFrames already takes a list of timestamps and decodes one frame
+    // each. For a still, we request a single frame at t=0. FFmpeg happily
+    // demuxes a PNG/JPG/WebP/GIF/HEIC into a one-frame video.
+    const frames = await sampleFrames(resolved.path, [0], 1);
+    if (frames.length === 0) {
+      throw new Error('Could not decode image reference');
+    }
+    const colorProfile = summariseColorProfile(frames);
+    // Probe to find the image dimensions so framing aspect-ratio is right.
+    let width = 1080;
+    let height = 1920;
+    try {
+      const meta = await extractMetadata(resolved.path);
+      if (meta.width) width = meta.width;
+      if (meta.height) height = meta.height;
+    } catch {
+      // ignore — synthesize from the sample if probe doesn't work on the still
+    }
+
+    const metadata: VideoMetadata = {
+      duration: 0,
+      width,
+      height,
+      fps: 0,
+      codec: 'still',
+      has_audio: false,
+    };
+    const cutPattern: CutPattern = {
+      avg_cut_duration_ms: 0,
+      min_cut_duration_ms: 0,
+      max_cut_duration_ms: 0,
+      median_cut_duration_ms: 0,
+      total_cuts: 0,
+      cuts_per_minute: 0,
+      cut_rhythm: 'steady',
+      rhythm_consistency: 1,
+      beat_sync: false,
+      cut_types: defaultCutTypes(),
+      duration_histogram: [0, 0, 0, 0, 0, 0, 1],
+      has_breathing_moments: false,
+    };
+    const audio: AudioFeatures = {
+      sample_rate: 0,
+      duration_seconds: 0,
+      has_audio: false,
+      bpm: null,
+      bpm_confidence: 0,
+      beats: [],
+      energy_curve: [],
+      silence_segments: [],
+      has_music: false,
+      has_speech: false,
+      speech_segments: [],
+      rms_mean: 0,
+      rms_peak: 0,
+      spectral_balance: { low: 0, mid: 0, high: 0 },
+    };
+    return {
+      metadata,
+      cutPattern,
+      colorProfile,
+      framingProfile: deriveFramingProfile(metadata),
+      pacing: derivePacing(cutPattern, audio, 0),
+      energyArc: {
+        shape: 'flat',
+        curve: new Array(10).fill(0.5),
+        has_cold_open: false,
+        climax_position: 0.5,
+      },
+      transitions: [],
+      audioSync: 'none',
+      audioEditRelationship: deriveAudioEditRelationship([], audio),
+      motionProfile: deriveMotionProfile(frames, cutPattern),
+      narrativeStructure: deriveNarrativeStructure(cutPattern, audio, {
+        shape: 'flat',
+        curve: [],
+        has_cold_open: false,
+        climax_position: 0.5,
+      }, 0),
+      // Lower confidence than a real video — an image only carries half the DNA.
+      confidence: 0.35,
+      audio,
+      frames,
+      rawCuts: [],
     };
   } finally {
     if (resolved.ephemeral) await unlinkQuiet(resolved.path);
@@ -857,22 +975,35 @@ function blendAnalyses(
   const sumW = weights.reduce((a, b) => a + b, 0) || 1;
   const w = weights.map((x) => x / sumW);
 
+  // Color blends across *all* references (including images — that's the whole
+  // point of mood boards). Everything temporal (cuts, pacing, energy, audio,
+  // motion, narrative) blends across video references only; if there are no
+  // video references at all, we fall back to the full set so we still produce
+  // a complete DNA shape.
+  const videoIdx: number[] = [];
+  refs.forEach((r, i) => {
+    if (r.type !== 'image') videoIdx.push(i);
+  });
+  const tempIdx = videoIdx.length > 0 ? videoIdx : refs.map((_, i) => i);
+  const tempAnalyses = tempIdx.map((i) => analyses[i]);
+  const tempW = renormalize(tempIdx.map((i) => w[i]));
+
   const cut: CutPattern = {
-    avg_cut_duration_ms: Math.round(weightedAvg(analyses.map((a) => a.cutPattern.avg_cut_duration_ms), w)),
-    min_cut_duration_ms: Math.min(...analyses.map((a) => a.cutPattern.min_cut_duration_ms)),
-    max_cut_duration_ms: Math.max(...analyses.map((a) => a.cutPattern.max_cut_duration_ms)),
-    median_cut_duration_ms: Math.round(weightedAvg(analyses.map((a) => a.cutPattern.median_cut_duration_ms), w)),
-    total_cuts: Math.round(weightedAvg(analyses.map((a) => a.cutPattern.total_cuts), w)),
-    cuts_per_minute: Number(weightedAvg(analyses.map((a) => a.cutPattern.cuts_per_minute), w).toFixed(2)),
-    cut_rhythm: pickWeighted(analyses.map((a) => a.cutPattern.cut_rhythm), w),
-    rhythm_consistency: Number(weightedAvg(analyses.map((a) => a.cutPattern.rhythm_consistency), w).toFixed(3)),
-    beat_sync: analyses.some((a, i) => a.cutPattern.beat_sync && w[i] > 0.2),
+    avg_cut_duration_ms: Math.round(weightedAvg(tempAnalyses.map((a) => a.cutPattern.avg_cut_duration_ms), tempW)),
+    min_cut_duration_ms: Math.min(...tempAnalyses.map((a) => a.cutPattern.min_cut_duration_ms)),
+    max_cut_duration_ms: Math.max(...tempAnalyses.map((a) => a.cutPattern.max_cut_duration_ms)),
+    median_cut_duration_ms: Math.round(weightedAvg(tempAnalyses.map((a) => a.cutPattern.median_cut_duration_ms), tempW)),
+    total_cuts: Math.round(weightedAvg(tempAnalyses.map((a) => a.cutPattern.total_cuts), tempW)),
+    cuts_per_minute: Number(weightedAvg(tempAnalyses.map((a) => a.cutPattern.cuts_per_minute), tempW).toFixed(2)),
+    cut_rhythm: pickWeighted(tempAnalyses.map((a) => a.cutPattern.cut_rhythm), tempW),
+    rhythm_consistency: Number(weightedAvg(tempAnalyses.map((a) => a.cutPattern.rhythm_consistency), tempW).toFixed(3)),
+    beat_sync: tempAnalyses.some((a, i) => a.cutPattern.beat_sync && tempW[i] > 0.2),
     cut_types: mergeWeighted(
-      analyses.flatMap((a, i) => a.cutPattern.cut_types.map((ct) => ({ type: ct.type, weight: ct.weight * w[i] })))
+      tempAnalyses.flatMap((a, i) => a.cutPattern.cut_types.map((ct) => ({ type: ct.type, weight: ct.weight * tempW[i] })))
     ),
-    duration_histogram: mergeHistograms(analyses.map((a) => a.cutPattern.duration_histogram), w),
-    has_breathing_moments: analyses.some((a, i) => a.cutPattern.has_breathing_moments && w[i] > 0.3),
-    breathing_interval_ms: analyses[0].cutPattern.breathing_interval_ms,
+    duration_histogram: mergeHistograms(tempAnalyses.map((a) => a.cutPattern.duration_histogram), tempW),
+    has_breathing_moments: tempAnalyses.some((a, i) => a.cutPattern.has_breathing_moments && tempW[i] > 0.3),
+    breathing_interval_ms: tempAnalyses[0].cutPattern.breathing_interval_ms,
   };
 
   const color: ColorProfile = {
@@ -882,17 +1013,33 @@ function blendAnalyses(
     brightness: Math.round(weightedAvg(analyses.map((a) => a.colorProfile.brightness), w)),
   };
 
-  const energyCurve = mergeCurves(analyses.map((a) => a.energyArc.curve), w);
+  const energyCurve = mergeCurves(tempAnalyses.map((a) => a.energyArc.curve), tempW);
   const arc: EnergyArc = {
-    shape: pickWeighted(analyses.map((a) => a.energyArc.shape), w),
+    shape: pickWeighted(tempAnalyses.map((a) => a.energyArc.shape), tempW),
     curve: energyCurve,
-    has_cold_open: analyses.some((a, i) => a.energyArc.has_cold_open && w[i] > 0.25),
-    climax_position: Number(weightedAvg(analyses.map((a) => a.energyArc.climax_position), w).toFixed(3)),
+    has_cold_open: tempAnalyses.some((a, i) => a.energyArc.has_cold_open && tempW[i] > 0.25),
+    climax_position: Number(weightedAvg(tempAnalyses.map((a) => a.energyArc.climax_position), tempW).toFixed(3)),
   };
 
-  // Highest-weighted reference contributes the categorical "personality" fields
-  const primaryIdx = w.indexOf(Math.max(...w));
-  const primary = analyses[primaryIdx];
+  // Highest-weighted *video* reference contributes the categorical "personality"
+  // fields (pacing, audio sync, motion, narrative). Falls back to highest
+  // overall if no videos.
+  const primaryLocalIdx = tempW.indexOf(Math.max(...tempW));
+  const primary = tempAnalyses[primaryLocalIdx];
+  const primaryGlobalIdx = videoIdx.length > 0 ? videoIdx[primaryLocalIdx] : w.indexOf(Math.max(...w));
+
+  const transitionItems = tempAnalyses.flatMap((a, i) =>
+    a.transitions.map((t) => ({ type: t.type, weight: t.weight * tempW[i] }))
+  );
+
+  // Dominant palette: collect from every analysis (videos *and* images carry
+  // a palette, and images are particularly useful as mood-board input).
+  const palettes = analyses
+    .map((a) => a.frames[0]?.stats.dominant_colors)
+    .filter((p): p is string[] => !!p && p.length > 0);
+  const aggregatePalette = palettes.length > 0
+    ? Array.from(new Set(palettes.flat())).slice(0, 8)
+    : [];
 
   return {
     confidence: Number((weightedAvg(analyses.map((a) => a.confidence), w) * 0.95).toFixed(3)),
@@ -902,25 +1049,35 @@ function blendAnalyses(
       cut_pattern: cut,
       pacing: primary.pacing,
       energy_arc: arc,
-      transition_preferences: mergeWeighted(
-        analyses.flatMap((a, i) => a.transitions.map((t) => ({ type: t.type, weight: t.weight * w[i] })))
-      ) as TransitionPreference[],
+      transition_preferences: (transitionItems.length > 0
+        ? (mergeWeighted(transitionItems) as TransitionPreference[])
+        : []),
       audio_sync_strategy: primary.audioSync,
       audio_edit_relationship: primary.audioEditRelationship,
       motion_profile: primary.motionProfile,
       text_style: primary.textStyle,
       narrative_structure: primary.narrativeStructure,
       raw_analysis: {
-        per_reference: analyses.map((a) => ({
+        per_reference: analyses.map((a, i) => ({
+          type: refs[i].type,
           duration: a.metadata.duration,
           fps: a.metadata.fps,
           cuts: a.cutPattern.total_cuts,
           bpm: a.audio.bpm,
         })),
-        primary_index: primaryIdx,
+        primary_index: primaryGlobalIdx,
+        dominant_palette: aggregatePalette,
+        video_count: videoIdx.length,
+        image_count: refs.length - videoIdx.length,
       },
     },
   };
+}
+
+function renormalize(weights: number[]): number[] {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return weights.map(() => 1 / Math.max(1, weights.length));
+  return weights.map((x) => x / sum);
 }
 
 function packageSingle(a: SingleAnalysisResult): BlendedResult {

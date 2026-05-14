@@ -110,10 +110,13 @@ export interface StyleDNA {
   updated_at: string;
 }
 
-/** A single reference video used to build Style DNA */
+/** A single reference (video OR still image) used to build Style DNA */
 export interface StyleReference {
   source_type: 'upload' | 'url';
-  url: string;                          // R2 URL or social media URL
+  /** What kind of media this reference is. Images contribute to color/framing
+   *  only; videos drive cut rhythm, pacing, audio, and motion. */
+  type: 'video' | 'image';
+  url: string;                          // R2 key or social media URL
   platform?: 'instagram' | 'tiktok' | 'youtube' | 'x' | 'other';
   creator_handle?: string;              // @creator if from social
   weight: number;                       // 0-1, how much this reference influences the blend

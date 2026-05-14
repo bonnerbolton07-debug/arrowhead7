@@ -121,6 +121,16 @@ export function generateProcessingKey(editId: string, step: string): string {
 }
 
 /**
+ * Generate a key for a mood-board reference image used by Style DNA.
+ * Keys land under `references/` so the analyzer can recognise them.
+ */
+export function generateReferenceImageKey(userId: string, editId: string, filename: string): string {
+  const ext = (filename.split('.').pop() || 'jpg').toLowerCase();
+  const slug = Math.random().toString(36).slice(2, 10);
+  return `references/${userId}/${editId}/${slug}.${ext}`;
+}
+
+/**
  * TODO: Implement lifecycle rules to auto-delete processing files after 24h.
  * R2 supports lifecycle policies via the dashboard or API.
  */
