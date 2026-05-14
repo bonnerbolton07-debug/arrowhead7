@@ -722,7 +722,7 @@ export default function EditorPage() {
       const res = await fetch('/api/captions/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaUrl: footageR2Key }),
+        body: JSON.stringify({ r2Key: footageR2Key }),
       });
       const data = await res.json();
       if (res.status === 503) {

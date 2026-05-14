@@ -14,6 +14,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import {
+  assertSafeFetchUrl,
+  SOCIAL_MEDIA_HOSTS,
+  trustedMediaHosts,
+} from '@/lib/security/url-safety';
 
 export interface ResolvedSource {
   /** Local path the FFmpeg pipeline can read */
@@ -71,6 +76,8 @@ export async function resolveSource(reference: string): Promise<ResolvedSource> 
   if (looksLikeUrl(reference)) {
     const platform = detectPlatform(reference);
     if (platform && platform !== 'other') {
+      // Restrict yt-dlp inputs to known social-media hosts (SSRF protection).
+      assertSafeFetchUrl(reference, { allowedHosts: SOCIAL_MEDIA_HOSTS });
       // Social URLs require yt-dlp which isn't available on serverless.
       // Check upfront and give a clear user-facing error.
       if (!(await isYtdlpAvailable())) {
@@ -81,6 +88,8 @@ export async function resolveSource(reference: string): Promise<ResolvedSource> 
       }
       return downloadSocial(reference);
     }
+    // Direct URL fetch — must point at our own storage/CDN, not arbitrary hosts.
+    assertSafeFetchUrl(reference, { allowedHosts: trustedMediaHosts() });
     return downloadToTmp(reference, ext);
   }
   // Local path (test/dev)
