@@ -334,8 +334,17 @@ function deriveSpeechSegments(
  *
  * If the source has no audio track we return an empty result so the caller can
  * still produce a valid StyleDNA — silent video is a real input mode.
+ *
+ * `maxSeconds` caps how much audio FFmpeg actually decodes. The analyser caps
+ * the same value upstream (maxAnalyzeSeconds default 90); without -t enforced
+ * here, FFmpeg still decoded the full audio track which dominated runtime on
+ * long references.
  */
-export async function analyzeAudio(filePath: string, hasAudioStream: boolean): Promise<AudioFeatures> {
+export async function analyzeAudio(
+  filePath: string,
+  hasAudioStream: boolean,
+  maxSeconds?: number
+): Promise<AudioFeatures> {
   const empty: AudioFeatures = {
     sample_rate: SAMPLE_RATE,
     duration_seconds: 0,
@@ -356,29 +365,22 @@ export async function analyzeAudio(filePath: string, hasAudioStream: boolean): P
 
   let stdout: Buffer;
   try {
-    const result = await runFfmpeg(
-      [
-        '-hide_banner',
-        '-nostats',
-        '-loglevel',
-        'error',
-        '-i',
-        filePath,
-        '-vn',
-        '-ac',
-        '1',
-        '-ar',
-        String(SAMPLE_RATE),
-        '-acodec',
-        'pcm_s16le',
-        '-f',
-        'wav',
-        '-',
-      ],
-      { timeoutMs: 120_000 }
+    const args = ['-hide_banner', '-nostats', '-loglevel', 'error'];
+    if (maxSeconds && maxSeconds > 0) {
+      args.push('-t', maxSeconds.toFixed(3));
+    }
+    args.push(
+      '-i', filePath,
+      '-vn',
+      '-ac', '1',
+      '-ar', String(SAMPLE_RATE),
+      '-acodec', 'pcm_s16le',
+      '-f', 'wav',
+      '-'
     );
+    const result = await runFfmpeg(args, { timeoutMs: 45_000 });
     stdout = result.stdout;
-  } catch (err) {
+  } catch {
     // Audio extraction failed — treat as silent.
     return { ...empty, has_audio: false };
   }

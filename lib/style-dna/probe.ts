@@ -114,21 +114,22 @@ export async function detectScenes(
   totalDuration: number,
   threshold = 0.3
 ): Promise<SceneCutList> {
-  const { stderr } = await runFfmpeg(
-    [
-      '-hide_banner',
-      '-nostats',
-      '-i',
-      filePath,
-      '-filter:v',
-      `select='gt(scene,${threshold})',showinfo`,
-      '-an',
-      '-f',
-      'null',
-      '-',
-    ],
-    { timeoutMs: 180_000 }
+  // Bound the input to `totalDuration` (already clamped to maxAnalyzeSeconds by
+  // the caller) — without -t, FFmpeg will scan the FULL video even when the
+  // analyser only cares about the first N seconds. On a 10-minute reference
+  // with a 90s analysis window this was a 6-7x slowdown.
+  const args = ['-hide_banner', '-nostats'];
+  if (totalDuration > 0) {
+    args.push('-t', totalDuration.toFixed(3));
+  }
+  args.push(
+    '-i', filePath,
+    '-filter:v', `select='gt(scene,${threshold})',showinfo`,
+    '-an',
+    '-f', 'null',
+    '-'
   );
+  const { stderr } = await runFfmpeg(args, { timeoutMs: 60_000 });
 
   const cuts: number[] = [];
   const scores: number[] = [];

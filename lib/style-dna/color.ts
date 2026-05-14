@@ -49,7 +49,10 @@ async function extractRgbFrame(filePath: string, atSeconds: number): Promise<Buf
         'rawvideo',
         '-',
       ],
-      { timeoutMs: 20_000 }
+      // 8s per frame is generous — fast-seek + 64x64 decode is sub-second on
+      // any sane input. The previous 20s was a holdover that could stack to
+      // 360s wall-clock across 18 frames and blow the route budget.
+      { timeoutMs: 8_000 }
     );
     if (stdout.length < SAMPLE_SIZE * SAMPLE_SIZE * 3) return null;
     return stdout.slice(0, SAMPLE_SIZE * SAMPLE_SIZE * 3);
@@ -160,7 +163,11 @@ export interface FrameAnalysis {
 export async function sampleFrames(
   filePath: string,
   timestamps: number[],
-  maxSamples = 18
+  maxSamples = 18,
+  /** Hard wall-clock budget for the entire sampling pass. We stop early if
+   *  we blow past it, even with frames remaining — a partial color profile is
+   *  better than blowing the route budget and falling back to heuristic. */
+  budgetMs = 25_000
 ): Promise<FrameAnalysis[]> {
   if (timestamps.length === 0) return [];
   const stride = Math.max(1, Math.floor(timestamps.length / maxSamples));
@@ -169,8 +176,10 @@ export async function sampleFrames(
     targets.push(timestamps[i]);
     if (targets.length >= maxSamples) break;
   }
+  const start = Date.now();
   const out: FrameAnalysis[] = [];
   for (const t of targets) {
+    if (Date.now() - start > budgetMs) break;
     const buf = await extractRgbFrame(filePath, Math.max(0, t + 0.1));
     if (!buf) continue;
     out.push({ timestamp: t, stats: analyseFrameBytes(buf) });

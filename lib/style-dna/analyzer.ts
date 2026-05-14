@@ -182,7 +182,7 @@ async function analyzeSingleReference(
       options.sceneThreshold ?? 0.3
     );
     const [audio, frames] = await Promise.all([
-      analyzeAudio(resolved.path, metadata.has_audio),
+      analyzeAudio(resolved.path, metadata.has_audio, analyzeDuration),
       sampleFrames(resolved.path, scenes.cuts, 18),
     ]);
 

@@ -9,7 +9,7 @@
 // upload the file directly.
 
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { createWriteStream, promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -23,6 +23,15 @@ export interface ResolvedSource {
 }
 
 const TMP_PREFIX = 'a7-dna-';
+/** Hard cap on a single source download. 30s comfortably covers a 50–100MB
+ *  presigned R2 fetch on a healthy connection; anything slower than that on a
+ *  serverless Lambda will eat the entire route budget. The route-level Promise.race
+ *  was meant to bound this, but `fetch()` doesn't honour that race — the body
+ *  read loop keeps draining bytes long after the route timer fires. Adding a
+ *  download-side AbortController is what actually stops the hang. */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+/** 1GB ceiling — anything bigger is rejected to keep tmp predictable. */
+const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024;
 
 export function looksLikeUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -92,29 +101,64 @@ async function pathExists(p: string): Promise<boolean> {
 
 async function downloadToTmp(url: string, ext: string = 'mp4'): Promise<ResolvedSource> {
   const dest = path.join(tmpdir(), `${TMP_PREFIX}${randomUUID()}.${ext}`);
-  const res = await fetch(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Source download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
   if (!res.ok || !res.body) {
+    clearTimeout(timer);
     throw new Error(`Failed to download source (${res.status})`);
   }
-  const chunks: Uint8Array[] = [];
+
+  // Stream to disk instead of buffering the whole file in memory. With ~1GB
+  // ceilings on serverless heaps, accumulating a Uint8Array array and then
+  // Buffer.concat'ing it was a real risk for large references; piping to a
+  // write stream keeps memory flat. The AbortController also stops the read
+  // loop if the body stalls mid-transfer.
+  const writeStream = createWriteStream(dest);
   let total = 0;
-  // 1GB ceiling — anything bigger is rejected to keep tmp predictable.
-  const MAX = 1024 * 1024 * 1024;
   const reader = res.body.getReader();
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (value) {
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
       total += value.byteLength;
-      if (total > MAX) {
+      if (total > MAX_DOWNLOAD_BYTES) {
+        controller.abort();
         throw new Error('Source exceeds 1GB ceiling for analysis');
       }
-      chunks.push(value);
+      if (!writeStream.write(Buffer.from(value))) {
+        // Honour backpressure so we don't blow the heap on fast networks.
+        await new Promise<void>((resolve, reject) => {
+          writeStream.once('drain', resolve);
+          writeStream.once('error', reject);
+        });
+      }
     }
+    await new Promise<void>((resolve, reject) => {
+      writeStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
+    // Best-effort cleanup so we don't leak a half-downloaded file in tmp.
+    writeStream.destroy();
+    await fs.unlink(dest).catch(() => undefined);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Source download stalled after ${DOWNLOAD_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-  await fs.writeFile(dest, buf);
   return { path: dest, ephemeral: true };
 }
 

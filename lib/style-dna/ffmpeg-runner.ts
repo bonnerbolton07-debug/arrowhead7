@@ -144,17 +144,29 @@ export async function runFfprobe(args: readonly string[], options?: FfmpegRunOpt
  * Verify that BOTH FFmpeg and FFprobe binaries are reachable. The analyser
  * needs ffprobe for metadata extraction and ffmpeg for frame/audio extraction.
  * If either is missing the caller should fall back to the heuristic path.
+ *
+ * Cached at the module level: binary availability doesn't change inside a
+ * single Lambda's lifetime, and `-version` was running on every analyze call
+ * (~100-200ms each). The cache is a Promise so concurrent first-callers don't
+ * race to spawn duplicate probes.
  */
+let cachedAvailability: Promise<boolean> | null = null;
 export async function isFfmpegAvailable(): Promise<boolean> {
-  try {
-    await Promise.all([
-      runProcess(getFfmpegPath(), ['-version'], { timeoutMs: 5_000 }),
-      runProcess(getFfprobePath(), ['-version'], { timeoutMs: 5_000 }),
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
+  if (cachedAvailability) return cachedAvailability;
+  cachedAvailability = (async () => {
+    try {
+      await Promise.all([
+        runProcess(getFfmpegPath(), ['-version'], { timeoutMs: 5_000 }),
+        runProcess(getFfprobePath(), ['-version'], { timeoutMs: 5_000 }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  // Re-resolve to a plain boolean to avoid leaking the promise reference if a
+  // future caller depends on a fresh check (none do today).
+  return cachedAvailability;
 }
 
 /**
