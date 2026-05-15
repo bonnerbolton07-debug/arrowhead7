@@ -63,6 +63,23 @@ export async function submitRender(config: ShotstackRenderConfig): Promise<strin
   return data.response.id;
 }
 
+export function summarizeShotstackConfig(config: ShotstackRenderConfig): {
+  tracks: number;
+  clips: number;
+  duration: number;
+  output: ShotstackOutput;
+} {
+  const clips = config.timeline.tracks.flatMap((track) => track.clips);
+  return {
+    tracks: config.timeline.tracks.length,
+    clips: clips.length,
+    duration: Number(
+      clips.reduce((max, clip) => Math.max(max, clip.start + clip.length), 0).toFixed(3)
+    ),
+    output: config.output,
+  };
+}
+
 export async function getRenderStatus(renderId: string): Promise<{
   status: string;
   progress: number;

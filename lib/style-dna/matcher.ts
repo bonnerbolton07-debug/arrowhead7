@@ -188,13 +188,26 @@ export function buildRenderConfig(
   source: SourceAnalysis,
   options: MatcherOptions
 ): ShotstackRenderConfig {
-  const targetDuration = Math.min(
-    options.targetDuration ?? Math.min(source.totalDuration, 30),
-    source.totalDuration
+  const safeSourceDuration = Number.isFinite(source.totalDuration) && source.totalDuration > 0.4
+    ? source.totalDuration
+    : Math.max(5, options.targetDuration ?? 30);
+  const targetDuration = Math.max(
+    1,
+    Math.min(options.targetDuration ?? Math.min(safeSourceDuration, 30), safeSourceDuration)
   );
+  const sourceSegments = source.segments.length > 0
+    ? source.segments
+    : [{
+        startTime: 0,
+        endTime: safeSourceDuration,
+        qualityScore: 0.8,
+        motionLevel: 0.5,
+        energyLevel: 0.5,
+        contentType: 'b-roll' as const,
+      }];
 
   const skeleton = buildTimelineSkeleton(dna, targetDuration);
-  const assigned = assignSegmentsToTimeline(source.segments, skeleton, dna);
+  const assigned = assignSegmentsToTimeline(sourceSegments, skeleton, dna);
   const rhythmAdjusted = applyRhythmPatterns(assigned, dna.cut_pattern);
 
   let videoClips = buildVideoClips(rhythmAdjusted, dna, options.sourceVideoUrl);
@@ -366,6 +379,7 @@ function sampleHistogramDurations(cut: CutPattern, targetDuration: number): numb
     const scale = wanted / sampleMean;
     return samples.map((s) => Math.max(300, Math.min(15000, s * scale)));
   }
+  if (samples.length === 0) return [Math.max(300, Math.min(15000, wanted || 1500))];
   return samples.map((s) => Math.max(300, Math.min(15000, s)));
 }
 
@@ -482,7 +496,8 @@ function buildVideoClips(
   const filter = mapColorProfileToFilter(dna.color_profile);
 
   return assigned.map((a, index) => {
-    const length = Math.max(0.4, a.slot.duration);
+    const available = Math.max(0.4, a.segment.endTime - a.segment.startTime);
+    const length = Math.max(0.4, Math.min(a.slot.duration, available));
     const transition = selectTransition(dna.transition_preferences, a.slot, index, assigned.length, dna.energy_arc);
     const clip: ShotstackClip = {
       asset: {

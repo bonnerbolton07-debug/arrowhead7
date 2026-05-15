@@ -6,11 +6,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { submitRender } from '@/lib/shotstack/client';
+import {
+  buildTimelineFromStyleDNA,
+  submitRender,
+  summarizeShotstackConfig,
+} from '@/lib/shotstack/client';
 import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
 import { rateLimitResponse } from '@/lib/rate-limit';
+import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import type { ShotstackOutput } from '@/types/edit';
 
 export const dynamic = 'force-dynamic';
+
+async function resolveRenderableUrl(value: string): Promise<string> {
+  if (/^https?:\/\//i.test(value)) return value;
+  return getPresignedDownloadUrl(value, 6 * 3600);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function videoOutputFormat(format: ShotstackOutput['format']): 'mp4' | 'webm' | 'gif' {
+  return format === 'webm' || format === 'gif' ? format : 'mp4';
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -73,15 +92,62 @@ export async function POST(request: NextRequest) {
       profile?.subscription_tier ?? null
     );
 
-    // Submit to Shotstack
+    // Submit to Shotstack. If the rich Style DNA timeline is rejected upstream,
+    // fall back to a minimal source-video render so the creator still gets an
+    // output instead of a hard failure.
     let shotstackRenderId: string;
+    let usedFallbackRender = false;
     try {
       shotstackRenderId = await submitRender(finalConfig);
     } catch (renderError) {
-      // Refund the credit if the upstream submit fails
-      await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
-      console.error('Shotstack submit failed:', renderError);
-      return NextResponse.json({ error: 'Render submission failed' }, { status: 502 });
+      console.error('[shotstack/render] primary submit failed; attempting minimal fallback', {
+        editId,
+        primaryConfig: summarizeShotstackConfig(finalConfig),
+        error: errorMessage(renderError).slice(0, 1000),
+      });
+
+      try {
+        if (!edit.source_video_url) throw new Error('Edit has no source_video_url for fallback render');
+        const sourceUrl = await resolveRenderableUrl(edit.source_video_url);
+        const fallbackConfig = applyWatermarkIfRequired(
+          buildTimelineFromStyleDNA(sourceUrl, null, {
+            targetDuration: Math.max(
+              5,
+              Math.min(
+                30,
+                Math.ceil(summarizeShotstackConfig(finalConfig).duration || 15)
+              )
+            ),
+            outputFormat: videoOutputFormat(finalConfig.output.format),
+            outputResolution: finalConfig.output.resolution,
+            outputFps: finalConfig.output.fps,
+          }),
+          profile?.subscription_tier ?? null
+        );
+        shotstackRenderId = await submitRender(fallbackConfig);
+        usedFallbackRender = true;
+        await supabase
+          .from('edits')
+          .update({ render_config: fallbackConfig })
+          .eq('id', editId);
+      } catch (fallbackError) {
+        // Refund the credit if both upstream submits fail.
+        await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
+        const primary = errorMessage(renderError);
+        const fallback = errorMessage(fallbackError);
+        console.error('[shotstack/render] primary and fallback submit failed', {
+          editId,
+          primary: primary.slice(0, 1000),
+          fallback: fallback.slice(0, 1000),
+        });
+        return NextResponse.json(
+          {
+            error: 'Render submission failed',
+            details: fallback || primary,
+          },
+          { status: 502 }
+        );
+      }
     }
 
     // Create render job record
@@ -134,6 +200,7 @@ export async function POST(request: NextRequest) {
       jobId: job.id,
       shotstackRenderId,
       status: 'processing',
+      fallback: usedFallbackRender,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {
