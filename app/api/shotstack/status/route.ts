@@ -8,10 +8,19 @@ import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getRenderStatus } from '@/lib/shotstack/client';
 import { uploadFromUrl } from '@/lib/cloudflare/stream';
-import { uploadToR2 } from '@/lib/cloudflare/r2';
-import { reserveVaultKey, registerVaultFile } from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
+const STREAM_COPY_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer!));
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -35,112 +44,86 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
 
-    // If already completed or failed, return cached status
+    // If already completed or failed, return cached status with output URLs.
     if (job.status === 'completed' || job.status === 'failed') {
+      const { data: edit } = await supabase
+        .from('edits')
+        .select('output_video_url, output_thumbnail_url, output_stream_uid')
+        .eq('id', job.edit_id)
+        .eq('user_id', user.id)
+        .maybeSingle();
       return NextResponse.json({
         status: job.status,
         progress: job.progress,
         error: job.error_message,
+        playbackUrl: edit?.output_video_url ?? null,
+        thumbnailUrl: edit?.output_thumbnail_url ?? null,
+        streamUid: edit?.output_stream_uid ?? null,
       });
     }
 
     // Poll Shotstack
     const shotstackStatus = await getRenderStatus(job.shotstack_render_id);
 
-    // If Shotstack is done, fan-out the output to both Cloudflare Stream
-    // (for playback) and the user's vault `/exports` folder on R2.
+    // If Shotstack is done, mark the edit completed immediately with the
+    // Shotstack output URL. Any secondary hosting must never block completion.
     if (shotstackStatus.status === 'done' && shotstackStatus.url) {
-      // Upload rendered video to Cloudflare Stream for playback. This is the
-      // preferred playback path, but it must not turn a completed Shotstack
-      // render into a failed editor flow if Stream config is missing or down.
-      let streamResult: { uid: string; playbackUrl: string; thumbnailUrl: string };
-      try {
-        streamResult = await uploadFromUrl(shotstackStatus.url, {
-          name: `edit-${job.edit_id}`,
-          editId: job.edit_id,
-        });
-      } catch (err) {
-        console.error('Cloudflare Stream upload failed; using Shotstack output URL as fallback', err);
-        streamResult = {
-          uid: '',
-          playbackUrl: shotstackStatus.url,
-          thumbnailUrl: '',
-        };
-      }
+      const completedAt = new Date().toISOString();
+      let playbackUrl = shotstackStatus.url;
+      let thumbnailUrl = '';
+      let streamUid = '';
 
-      // Copy to the user's vault `/exports` folder. We do this best-effort —
-      // failure here shouldn't block the success response, the user can still
-      // download via the Stream playback URL.
-      let vaultFileId: string | null = null;
-      try {
-        const renderedRes = await fetch(shotstackStatus.url);
-        if (renderedRes.ok && renderedRes.body) {
-          const contentType =
-            renderedRes.headers.get('content-type')?.split(';')[0].trim() ||
-            'video/mp4';
-          const ext = contentType.includes('webm') ? 'webm' : 'mp4';
-          const filename = `edit-${String(job.edit_id).slice(0, 8)}.${ext}`;
-          const r2Key = reserveVaultKey(user.id, 'exports', filename);
-
-          const reader = renderedRes.body.getReader();
-          const chunks: Uint8Array[] = [];
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) chunks.push(value);
-          }
-          const buf = Buffer.concat(chunks);
-          await uploadToR2(r2Key, buf, contentType);
-
-          const file = await registerVaultFile({
-            userId: user.id,
-            r2Key,
-            filename,
-            contentType,
-            sizeBytes: buf.length,
-            folder: 'exports',
-            source: 'render',
-            editId: job.edit_id,
-            thumbnailUrl: streamResult.thumbnailUrl || undefined,
-            metadata: {
-              shotstack_render_id: job.shotstack_render_id,
-              stream_uid: streamResult.uid || undefined,
-            },
-          });
-          vaultFileId = file?.id ?? null;
-        }
-      } catch (err) {
-        console.error('Vault export copy failed (non-fatal)', err);
-      }
-
-      // Update render job
       await supabase
         .from('render_jobs')
         .update({
           status: 'completed',
           progress: 100,
-          completed_at: new Date().toISOString(),
+          completed_at: completedAt,
         })
         .eq('id', jobId);
 
-      // Update edit with output URLs
       await supabase
         .from('edits')
         .update({
           status: 'completed',
-          output_video_url: streamResult.playbackUrl,
-          output_stream_uid: streamResult.uid || null,
-          output_thumbnail_url: streamResult.thumbnailUrl || null,
-          completed_at: new Date().toISOString(),
+          output_video_url: playbackUrl,
+          output_stream_uid: null,
+          output_thumbnail_url: null,
+          completed_at: completedAt,
         })
         .eq('id', job.edit_id);
+
+      // Best-effort Stream copy for better playback. If Cloudflare is slow or
+      // unavailable, the completed edit still has the Shotstack MP4 URL.
+      let streamResult: { uid: string; playbackUrl: string; thumbnailUrl: string };
+      try {
+        streamResult = await withTimeout(
+          uploadFromUrl(shotstackStatus.url, {
+            name: `edit-${job.edit_id}`,
+            editId: job.edit_id,
+          }),
+          STREAM_COPY_TIMEOUT_MS,
+          'Cloudflare Stream copy'
+        );
+        thumbnailUrl = streamResult.thumbnailUrl;
+        streamUid = streamResult.uid;
+        await supabase
+          .from('edits')
+          .update({
+            output_stream_uid: streamUid,
+            output_thumbnail_url: thumbnailUrl,
+          })
+          .eq('id', job.edit_id);
+      } catch (err) {
+        console.error('Cloudflare Stream copy skipped; using Shotstack output URL fallback', err);
+      }
 
       return NextResponse.json({
         status: 'completed',
         progress: 100,
-        playbackUrl: streamResult.playbackUrl,
-        thumbnailUrl: streamResult.thumbnailUrl,
-        vaultFileId,
+        playbackUrl,
+        thumbnailUrl,
+        streamUid,
       });
     }
 
