@@ -139,6 +139,7 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const STYLE_DNA_CLIENT_FALLBACK_MS = 20_000;
+const MAX_DEEP_STYLE_REFERENCES = 12;
 
 function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind['kind'] {
   return `${scope}-${kind}` as UploadKind['kind'];
@@ -1241,7 +1242,9 @@ function EditorPageInner() {
       try {
         // Weight each reference equally; videos drive temporal fields, images
         // contribute to color. (See analyzer.ts blendAnalyses for details.)
-        const payload = readyRefs.map((r) => ({ url: r.url, type: r.kind }));
+        const payload = readyRefs
+          .slice(0, MAX_DEEP_STYLE_REFERENCES)
+          .map((r) => ({ url: r.url, type: r.kind }));
         controller = new AbortController();
         // Style DNA must never block the editing pipeline. If deep analysis
         // stalls, fall forward with deterministic Quick Style DNA.
@@ -1632,7 +1635,7 @@ function EditorPageInner() {
           <div className="w-full max-w-2xl">
             <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Add Your References</h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Drop in reference edits, images, music, SFX, and social links. A7 blends them into one Style DNA.
+              Drop in unlimited reference edits, images, music, SFX, and social links. A7 keeps them in the project and deeply analyzes the first 12 ordered references for Style DNA.
             </p>
 
             <button
@@ -1711,6 +1714,9 @@ function EditorPageInner() {
                   {readyRefs.length !== references.length &&
                     ` · ${readyRefs.length} ready`}
                 </div>
+                <p className="text-xs text-a7-text/35 mb-3">
+                  Put the most important references first. Deep Style DNA uses the first 12; the full set remains saved for taste, direction, and variations.
+                </p>
                 <div className="space-y-2">
                   {references.map((ref, idx) => (
                     <ReferenceRow

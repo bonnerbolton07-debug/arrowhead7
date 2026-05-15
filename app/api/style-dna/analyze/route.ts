@@ -20,6 +20,7 @@ export const maxDuration = 300;
 
 /** Hard ceiling so the Lambda never idles for 5 minutes on a stuck pipeline. */
 const ANALYSIS_TIMEOUT_MS = 60_000;
+const MAX_DEEP_REFERENCES = 12;
 
 const Body = z.object({
   references: z.array(
@@ -29,7 +30,7 @@ const Body = z.object({
       platform: z.enum(['instagram', 'tiktok', 'youtube', 'x', 'other']).optional(),
       weight: z.number().min(0).max(1).optional(),
     })
-  ).min(1).max(10),
+  ).min(1).max(100),
   options: z.object({
     maxAnalyzeSeconds: z.number().min(5).max(300).optional(),
     sceneThreshold: z.number().min(0.05).max(0.95).optional(),
@@ -59,9 +60,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 });
     }
     const { references, options } = parsed.data;
+    const analysisReferences = references.slice(0, MAX_DEEP_REFERENCES);
 
     const dna = await withTimeout(
-      analyzeReferenceVideos(references, user.id, options),
+      analyzeReferenceVideos(analysisReferences, user.id, options),
       ANALYSIS_TIMEOUT_MS,
       'Style DNA analysis'
     );
