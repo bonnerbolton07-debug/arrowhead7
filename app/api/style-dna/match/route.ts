@@ -72,24 +72,85 @@ export async function POST(request: NextRequest) {
     }
     const { editId, styleDNA, options } = parsed.data;
     const dna = styleDNA as StyleDNA;
+    const sourceMedia = options?.sourceMedia ?? [];
+    const primaryMedia = sourceMedia.find((m) => m.type === 'video') ?? null;
 
     // Fetch the edit so we know the source-video R2 key
-    const { data: edit, error } = await supabase
+    let { data: edit, error } = await supabase
       .from('edits')
       .select('id, source_video_url, user_id')
       .eq('id', editId)
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
     if (error || !edit) {
-      return NextResponse.json({ error: 'Edit not found' }, { status: 404 });
+      if (!primaryMedia?.url) {
+        console.warn('[style-dna/match] missing edit row and no primary source media', {
+          editId,
+          hasEdit: Boolean(edit),
+          sourceMediaCount: sourceMedia.length,
+        });
+        return NextResponse.json(
+          { error: 'A7 could not find this edit. Go back to Source Media and re-add the primary video.' },
+          { status: 404 }
+        );
+      }
+
+      const { data: repairedEdit, error: repairError } = await supabase
+        .from('edits')
+        .upsert({
+          id: editId,
+          user_id: user.id,
+          title: primaryMedia.label?.replace(/\.[^.]+$/, '') || 'Untitled edit',
+          status: 'draft',
+          source_video_url: primaryMedia.url,
+        })
+        .select('id, source_video_url, user_id')
+        .single();
+
+      if (repairError || !repairedEdit) {
+        console.error('[style-dna/match] failed to repair missing edit row', {
+          editId,
+          error: repairError?.message,
+        });
+        return NextResponse.json(
+          { error: 'A7 could not save this edit before rendering. Refresh and try again.' },
+          { status: 500 }
+        );
+      }
+      edit = repairedEdit;
     }
     if (!edit.source_video_url) {
-      return NextResponse.json({ error: 'Edit has no source footage' }, { status: 400 });
+      if (primaryMedia?.url) {
+        const { data: repairedEdit, error: repairError } = await supabase
+          .from('edits')
+          .update({ source_video_url: primaryMedia.url })
+          .eq('id', editId)
+          .eq('user_id', user.id)
+          .select('id, source_video_url, user_id')
+          .single();
+        if (!repairError && repairedEdit) {
+          edit = repairedEdit;
+        }
+      }
+      if (!edit.source_video_url) {
+        console.warn('[style-dna/match] edit has no source footage', {
+          editId,
+          sourceMediaCount: sourceMedia.length,
+        });
+        return NextResponse.json(
+          { error: 'A7 has no primary video for this edit. Go back to Source Media and add one video clip.' },
+          { status: 400 }
+        );
+      }
     }
 
-    const sourceMedia = options?.sourceMedia ?? [];
-    const primaryMedia = sourceMedia.find((m) => m.type === 'video') ?? null;
     const sourceKey = primaryMedia?.url ?? edit.source_video_url;
+    console.info('[style-dna/match] building render config', {
+      editId,
+      sourceMediaCount: sourceMedia.length,
+      hasPrimaryVideo: Boolean(primaryMedia?.url || edit.source_video_url),
+      targetDuration: options?.targetDuration ?? 30,
+    });
     // Shotstack needs a publicly-fetchable URL; we hand it a 6h presigned URL.
     const renderableUrl = await resolveRenderableUrl(sourceKey);
     const renderSlate = selectRenderSlate(sourceMedia);
@@ -183,10 +244,25 @@ export async function POST(request: NextRequest) {
     });
 
     // Persist the render config on the edit row.
-    await supabase
+    const { error: updateError } = await supabase
       .from('edits')
       .update({ render_config: renderConfig, status: 'ready' })
       .eq('id', editId);
+    if (updateError) {
+      console.error('[style-dna/match] failed to persist render config', {
+        editId,
+        error: updateError.message,
+      });
+      return NextResponse.json(
+        { error: 'A7 built the render plan but could not save it. Try again.' },
+        { status: 500 }
+      );
+    }
+
+    console.info('[style-dna/match] render config ready', {
+      editId,
+      slateCount: renderableSourceMedia.length,
+    });
 
     return NextResponse.json({ renderConfig, soundtrack });
   } catch (error) {

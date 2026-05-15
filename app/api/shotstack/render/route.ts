@@ -40,6 +40,23 @@ function firstVideoAssetUrl(config: { timeline?: { tracks?: Array<{ clips?: Arra
   return null;
 }
 
+function buildFallbackConfig(
+  sourceUrl: string,
+  options?: {
+    duration?: number;
+    format?: ShotstackOutput['format'];
+    resolution?: ShotstackOutput['resolution'];
+    fps?: number;
+  }
+) {
+  return buildTimelineFromStyleDNA(sourceUrl, null, {
+    targetDuration: Math.max(5, Math.min(30, Math.ceil(options?.duration || 15))),
+    outputFormat: videoOutputFormat(options?.format ?? 'mp4'),
+    outputResolution: options?.resolution ?? '1080',
+    outputFps: options?.fps ?? 30,
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
@@ -64,10 +81,6 @@ export async function POST(request: NextRequest) {
 
     if (editError || !edit) {
       return NextResponse.json({ error: 'Edit not found' }, { status: 404 });
-    }
-
-    if (!edit.render_config) {
-      return NextResponse.json({ error: 'Edit has no render config' }, { status: 400 });
     }
 
     const { data: activeJob } = await supabase
@@ -115,10 +128,45 @@ export async function POST(request: NextRequest) {
       .eq('id', user.id)
       .single();
 
+    let renderConfig = edit.render_config;
+    let startedFromFallbackConfig = false;
+    if (!renderConfig) {
+      const fallbackSourceUrl = edit.source_video_url
+        ? await resolveRenderableUrl(edit.source_video_url)
+        : null;
+      if (!fallbackSourceUrl) {
+        console.warn('[shotstack/render] missing render config and source footage', {
+          editId,
+        });
+        return NextResponse.json(
+          { error: 'A7 could not find a render plan or source video. Go back to Source Media and add one video clip.' },
+          { status: 400 }
+        );
+      }
+      renderConfig = buildFallbackConfig(fallbackSourceUrl);
+      startedFromFallbackConfig = true;
+      const { error: persistFallbackError } = await supabase
+        .from('edits')
+        .update({ render_config: renderConfig, status: 'ready' })
+        .eq('id', editId)
+        .eq('user_id', user.id);
+      if (persistFallbackError) {
+        console.error('[shotstack/render] failed to persist fallback render config', {
+          editId,
+          error: persistFallbackError.message,
+        });
+      }
+    }
+
     const finalConfig = applyWatermarkIfRequired(
-      edit.render_config,
+      renderConfig,
       profile?.subscription_tier ?? null
     );
+    console.info('[shotstack/render] submitting render', {
+      editId,
+      fallbackConfig: startedFromFallbackConfig,
+      summary: summarizeShotstackConfig(finalConfig),
+    });
 
     // Submit to Shotstack. If the rich Style DNA timeline is rejected upstream,
     // fall back to a minimal source-video render so the creator still gets an
@@ -140,17 +188,11 @@ export async function POST(request: NextRequest) {
           : firstVideoAssetUrl(finalConfig);
         if (!sourceUrl) throw new Error('Edit has no renderable video source for fallback render');
         const fallbackConfig = applyWatermarkIfRequired(
-          buildTimelineFromStyleDNA(sourceUrl, null, {
-            targetDuration: Math.max(
-              5,
-              Math.min(
-                30,
-                Math.ceil(summarizeShotstackConfig(finalConfig).duration || 15)
-              )
-            ),
-            outputFormat: videoOutputFormat(finalConfig.output.format),
-            outputResolution: finalConfig.output.resolution,
-            outputFps: finalConfig.output.fps,
+          buildFallbackConfig(sourceUrl, {
+            duration: summarizeShotstackConfig(finalConfig).duration,
+            format: finalConfig.output.format,
+            resolution: finalConfig.output.resolution,
+            fps: finalConfig.output.fps,
           }),
           profile?.subscription_tier ?? null
         );
@@ -172,7 +214,9 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json(
           {
-            error: 'Render submission failed. Your credit was returned. Try a shorter clip or fewer media layers.',
+            error: 'Render submission failed. Your credit was returned. A7 could not submit the media to the render provider.',
+            reason: 'provider_submit_failed',
+            detail: fallback.slice(0, 240),
           },
           { status: 502 }
         );
@@ -225,11 +269,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    console.info('[shotstack/render] render job created', {
+      editId,
+      jobId: job.id,
+      fallback: usedFallbackRender || startedFromFallbackConfig,
+    });
+
     return NextResponse.json({
       jobId: job.id,
       shotstackRenderId,
       status: 'processing',
-      fallback: usedFallbackRender,
+      fallback: usedFallbackRender || startedFromFallbackConfig,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {

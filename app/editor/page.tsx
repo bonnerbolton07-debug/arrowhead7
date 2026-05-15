@@ -1704,6 +1704,8 @@ function EditorPageInner() {
 
       const { res, data } = await fetchJsonWithTimeout<{
         error?: string;
+        detail?: string;
+        reason?: string;
         jobId?: string;
         duplicate?: boolean;
         fallback?: boolean;
@@ -1717,7 +1719,12 @@ function EditorPageInner() {
         RENDER_SUBMIT_TIMEOUT_MS,
         'Render submission'
       );
-      if (!res.ok) throw new Error(data.error || `Render submit failed: ${res.status}`);
+      if (!res.ok) {
+        const message = data.detail
+          ? `${data.error || `Render submit failed: ${res.status}`} (${data.detail})`
+          : data.error || `Render submit failed: ${res.status}`;
+        throw new Error(message);
+      }
 
       if (!data.jobId) throw new Error('Renderer did not return a job id. Your edit is saved; try again.');
       setRenderJobId(data.jobId);
