@@ -1,7 +1,7 @@
 'use client';
 
 // =============================================================================
-// ARENAXOS — Onboarding Client
+// Arrowhead 7 — Onboarding Client
 // =============================================================================
 // Four sequential steps:
 //   1. Create Your Vault — pick a vault name, see the folder layout
@@ -68,6 +68,14 @@ const ALLOWED = new Set([
   'image/heic',
   'image/heif',
   'image/avif',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/flac',
 ]);
 
 function formatBytes(n: number): string {
@@ -176,7 +184,7 @@ export function OnboardingClient({ initial }: { initial: InitialState }) {
           className="flex items-center gap-3 text-a7-text/40 hover:text-a7-text text-sm transition-colors"
         >
           <LogoIcon size={24} variant="dual" />
-          <span className="font-medium text-a7-text">ARENAXOS</span>
+          <span className="font-medium text-a7-text">Arrowhead 7</span>
         </a>
         <div className="text-[10px] uppercase tracking-wider text-a7-text/30 font-mono">
           Onboarding · {stepIdx + 1} of {STEPS.length}
@@ -639,6 +647,7 @@ function ImportStep({
             body: JSON.stringify({
               filename: file.name,
               contentType: file.type,
+              sizeBytes: file.size,
             }),
           });
           if (!presignRes.ok) {
@@ -768,7 +777,7 @@ function ImportStep({
         <input
           ref={inputRef}
           type="file"
-          accept="video/*,image/*"
+          accept="video/*,image/*,audio/*"
           multiple
           className="hidden"
           onChange={(e) => {
@@ -780,7 +789,7 @@ function ImportStep({
         <UploadIcon size={32} gradient="teal" className="mx-auto mb-2" />
         <p className="text-a7-text/60 text-sm">Drop files or click to upload from device</p>
         <p className="text-a7-text/30 text-xs mt-1">
-          MP4 · MOV · AVI · WebM · JPG · PNG · WebP · HEIC up to 2GB
+          Video up to 500MB · images up to 25MB · audio up to 100MB
         </p>
       </label>
 
@@ -945,7 +954,7 @@ function StudioStep({
       <Heading
         eyebrow="Step 4 of 4"
         title="You're ready to create"
-        subtitle="Your vault is set up and your content is staged. Next, head into the studio — pick references and footage straight from your vault, and ARENAXOS will compose the cut."
+        subtitle="Your vault is set up and your content is staged. Next, head into the studio — pick references and footage straight from your vault, and A7 will compose the cut."
       />
 
       <div

@@ -9,8 +9,8 @@ import { OnboardingClient } from './OnboardingClient';
 export const dynamic = 'force-dynamic';
 
 export const metadata = {
-  title: 'Welcome — ARENAXOS',
-  description: 'Set up your vault and start creating with ARENAXOS.',
+  title: 'Welcome — Arrowhead 7',
+  description: 'Set up your vault and start creating with Arrowhead 7.',
 };
 
 type OnboardingStep = 'vault' | 'sources' | 'import' | 'studio' | 'done';

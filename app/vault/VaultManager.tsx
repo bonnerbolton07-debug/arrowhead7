@@ -53,6 +53,14 @@ const ALLOWED = new Set([
   'image/heic',
   'image/heif',
   'image/avif',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/flac',
 ]);
 
 function formatBytes(n: number): string {
@@ -140,6 +148,20 @@ export function VaultManager({
   const uploadFile = useCallback(
     async (file: File, targetFolder: VaultFolder) => {
       if (!ALLOWED.has(file.type)) return;
+      if (quotaBytes !== -1 && storageBytes + file.size > quotaBytes) {
+        const localId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        setUploadingItems((p) => [
+          ...p,
+          {
+            id: localId,
+            name: file.name,
+            progress: 0,
+            folder: targetFolder,
+            error: 'Vault storage limit reached. Delete files or upgrade before uploading more media.',
+          },
+        ]);
+        return;
+      }
       const localId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       setUploadingItems((p) => [
         ...p,
@@ -156,6 +178,7 @@ export function VaultManager({
             filename: file.name,
             contentType: file.type,
             folder: targetFolder,
+            sizeBytes: file.size,
           }),
         });
         if (!presignRes.ok) {
@@ -199,7 +222,7 @@ export function VaultManager({
         patch({ error: err instanceof Error ? err.message : 'Upload failed' });
       }
     },
-    [refresh]
+    [quotaBytes, refresh, storageBytes]
   );
 
   const handleFiles = useCallback(
@@ -343,7 +366,7 @@ export function VaultManager({
       <input
         ref={inputRef}
         type="file"
-        accept="video/*,image/*"
+        accept="video/*,image/*,audio/*"
         multiple
         className="hidden"
         onChange={(e) => {

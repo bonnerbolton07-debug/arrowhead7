@@ -38,6 +38,10 @@ const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 
+function ownsProcessingKey(key: string, userId: string): boolean {
+  return key.startsWith(`sources/${userId}/`) || key.startsWith(`references/${userId}/`);
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
@@ -89,7 +93,7 @@ export async function POST(request: NextRequest) {
         }
         // Authorize: the key must live under the caller's user prefix. Otherwise
         // a logged-in user could sign chunks for someone else's in-flight upload.
-        if (!key.includes(`/${user.id}/`)) {
+        if (typeof key !== 'string' || !ownsProcessingKey(key, user.id)) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
         const url = await getPresignedUploadPartUrl(key, uploadId, partNumber);
@@ -101,7 +105,7 @@ export async function POST(request: NextRequest) {
         if (!key || !uploadId || !Array.isArray(parts) || parts.length === 0) {
           return NextResponse.json({ error: 'Missing key, uploadId, or parts' }, { status: 400 });
         }
-        if (!key.includes(`/${user.id}/`)) {
+        if (typeof key !== 'string' || !ownsProcessingKey(key, user.id)) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
         await completeMultipartUpload(key, uploadId, parts);
@@ -113,7 +117,7 @@ export async function POST(request: NextRequest) {
         if (!key || !uploadId) {
           return NextResponse.json({ error: 'Missing key or uploadId' }, { status: 400 });
         }
-        if (!key.includes(`/${user.id}/`)) {
+        if (typeof key !== 'string' || !ownsProcessingKey(key, user.id)) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
         await abortMultipartUpload(key, uploadId);
