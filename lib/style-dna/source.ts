@@ -205,12 +205,19 @@ async function downloadSocial(url: string): Promise<ResolvedSource> {
   ];
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ytdlp, args, { stdio: 'ignore' });
-    child.on('error', () =>
-      reject(new Error('Social media URLs can\'t be analyzed directly. Save the video to your device and upload the file instead.'))
-    );
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error(`yt-dlp exited ${code} for ${url}`))
-    );
+    // 30s timeout: kill the yt-dlp child if it stalls so the route can recover.
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Social URL download timed out after 30s — upload the file directly instead.'));
+    }, 30_000);
+    child.on('error', () => {
+      clearTimeout(timer);
+      reject(new Error('Social media URLs can\'t be analyzed directly. Save the video to your device and upload the file instead.'));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve() : reject(new Error(`yt-dlp exited ${code} for ${url}`));
+    });
   });
   if (!(await pathExists(dest))) {
     throw new Error('yt-dlp succeeded but produced no file');
