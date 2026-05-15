@@ -10,6 +10,7 @@ import { getRenderStatus } from '@/lib/shotstack/client';
 import { uploadFromUrl } from '@/lib/cloudflare/stream';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 const STREAM_COPY_TIMEOUT_MS = 12_000;
 const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS ?? 45 * 60 * 1000);
 type SupabaseServerClient = Awaited<ReturnType<typeof createServerSupabaseClient>>;

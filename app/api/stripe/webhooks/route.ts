@@ -7,6 +7,7 @@
 //   - checkout.session.completed       → activate the new subscription
 //   - customer.subscription.updated    → keep tier/status in sync
 //   - customer.subscription.deleted    → downgrade to free
+//   - invoice.paid / payment_succeeded → reset the monthly credit allotment
 //   - invoice.payment_failed           → mark subscription past_due
 //
 // Verifies the signature against STRIPE_WEBHOOK_SECRET. Uses the service-role
@@ -66,6 +67,10 @@ export async function POST(request: NextRequest) {
         break;
       case 'customer.subscription.deleted':
         await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
+      case 'invoice.paid':
+      case 'invoice.payment_succeeded':
+        await handleInvoicePaid(event.data.object as Stripe.Invoice);
         break;
       case 'invoice.payment_failed':
         await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
@@ -136,6 +141,38 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
       cancel_at_period_end: false,
     })
     .eq('stripe_subscription_id', subscription.id);
+}
+
+/**
+ * A subscription invoice was paid. For renewal invoices this is the only event
+ * that fires each billing cycle — without it the monthly credit pool would
+ * never replenish. `applySubscriptionState` is authoritative: it re-stamps
+ * tier/status/period end and resets `credits_remaining` to the tier allotment.
+ */
+async function handleInvoicePaid(invoice: Stripe.Invoice) {
+  const subscriptionId = typeof invoice.subscription === 'string'
+    ? invoice.subscription
+    : invoice.subscription?.id;
+  if (!subscriptionId) return;
+
+  // Only act on subscription lifecycle invoices. `subscription_create` is also
+  // covered by checkout.session.completed; `subscription_cycle` (the monthly
+  // renewal) is the case that actually needs the credit reset. Proration and
+  // one-off invoices must not silently refill credits.
+  const billingReason = invoice.billing_reason;
+  if (
+    billingReason &&
+    billingReason !== 'subscription_cycle' &&
+    billingReason !== 'subscription_create'
+  ) {
+    return;
+  }
+
+  const sub = await getStripe().subscriptions.retrieve(subscriptionId);
+  const userId = await resolveUserId(sub);
+  if (!userId) return;
+
+  await applySubscriptionState(userId, sub);
 }
 
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {

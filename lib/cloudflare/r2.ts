@@ -14,6 +14,7 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   ListObjectsV2Command,
+  ListMultipartUploadsCommand,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -248,10 +249,109 @@ export async function abortMultipartUpload(
   );
 }
 
+// ─── Lifecycle cleanup ───────────────────────────────────────────────────────
+// R2 does not expire incomplete multipart uploads or transient processing
+// files on its own, so both leak storage indefinitely. `purgeStaleR2` is run
+// on a cron (see app/api/cleanup/r2/route.ts) to reclaim that space.
+
+/** Default staleness window — anything older than this is eligible for purge. */
+const R2_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+export interface PendingMultipartUpload {
+  key: string;
+  uploadId: string;
+  initiated?: Date;
+}
+
+/** List in-progress (incomplete) multipart uploads in the bucket. */
+export async function listMultipartUploads(max = 1000): Promise<PendingMultipartUpload[]> {
+  const client = getR2Client();
+  const { bucket } = getR2Config();
+  const out: PendingMultipartUpload[] = [];
+  let keyMarker: string | undefined;
+  let uploadIdMarker: string | undefined;
+  do {
+    const res = await client.send(
+      new ListMultipartUploadsCommand({
+        Bucket: bucket,
+        KeyMarker: keyMarker,
+        UploadIdMarker: uploadIdMarker,
+      })
+    );
+    for (const up of res.Uploads ?? []) {
+      if (up.Key && up.UploadId) {
+        out.push({ key: up.Key, uploadId: up.UploadId, initiated: up.Initiated });
+        if (out.length >= max) break;
+      }
+    }
+    if (res.IsTruncated && out.length < max) {
+      keyMarker = res.NextKeyMarker;
+      uploadIdMarker = res.NextUploadIdMarker;
+    } else {
+      keyMarker = undefined;
+      uploadIdMarker = undefined;
+    }
+  } while (keyMarker && out.length < max);
+  return out;
+}
+
+export interface R2CleanupResult {
+  scannedUploads: number;
+  abortedUploads: number;
+  scannedObjects: number;
+  deletedObjects: number;
+}
+
 /**
- * TODO: Implement lifecycle rules to auto-delete processing files after 24h.
- * R2 supports lifecycle policies via the dashboard or API.
+ * Purge abandoned multipart uploads and stale `processing/` intermediate files
+ * older than `olderThanMs`. Conservative: an upload/object with no usable
+ * timestamp is left alone rather than risk killing an in-flight resumable
+ * upload. Individual failures are logged and skipped — one bad key never
+ * aborts the whole sweep.
  */
+export async function purgeStaleR2(olderThanMs = R2_STALE_AFTER_MS): Promise<R2CleanupResult> {
+  const cutoff = Date.now() - olderThanMs;
+  const result: R2CleanupResult = {
+    scannedUploads: 0,
+    abortedUploads: 0,
+    scannedObjects: 0,
+    deletedObjects: 0,
+  };
+
+  const uploads = await listMultipartUploads();
+  result.scannedUploads = uploads.length;
+  for (const up of uploads) {
+    const initiated = up.initiated ? up.initiated.getTime() : 0;
+    if (!initiated || initiated > cutoff) continue;
+    try {
+      await abortMultipartUpload(up.key, up.uploadId);
+      result.abortedUploads++;
+    } catch (err) {
+      console.error('[r2:cleanup] abort multipart upload failed', {
+        key: up.key,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const processing = await listR2('processing/');
+  result.scannedObjects = processing.length;
+  for (const obj of processing) {
+    const modified = obj.lastModified ? obj.lastModified.getTime() : 0;
+    if (!modified || modified > cutoff) continue;
+    try {
+      await deleteFromR2(obj.key);
+      result.deletedObjects++;
+    } catch (err) {
+      console.error('[r2:cleanup] delete stale object failed', {
+        key: obj.key,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return result;
+}
 
 // ─── User Vault Keys ─────────────────────────────────────────────────────────
 // All persistent user content lives under `users/{uid}/vault/{folder}/...`.
@@ -293,6 +393,25 @@ export function parseVaultKey(
     userId: m[1],
     folder: m[2] as VaultFolder,
     filename: m[3],
+  };
+}
+
+/**
+ * Parse an editor source/reference media key — the `sources/{uid}/{editId}/...`
+ * and `references/{uid}/{editId}/...` keys produced by `generateSourceKey` /
+ * `generateReferenceMediaKey`. These predate the vault path scheme but still
+ * need to be registered into the vault index after upload, so vault/register
+ * accepts them via this parser.
+ */
+export function parseEditorMediaKey(
+  key: string
+): { userId: string; editId: string; filename: string } | null {
+  const m = key.match(/^(sources|references)\/([^/]+)\/([^/]+)\/(.+)$/);
+  if (!m) return null;
+  return {
+    userId: m[2],
+    editId: m[3],
+    filename: m[4],
   };
 }
 

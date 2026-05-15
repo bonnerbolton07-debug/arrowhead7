@@ -9,6 +9,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import {
   buildTimelineFromStyleDNA,
   submitRender,
+  cancelRender,
   summarizeShotstackConfig,
 } from '@/lib/shotstack/client';
 import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
@@ -17,6 +18,7 @@ import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
 import type { ShotstackOutput } from '@/types/edit';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 async function resolveRenderableUrl(value: string): Promise<string> {
   if (/^https?:\/\//i.test(value)) return value;
@@ -238,7 +240,19 @@ export async function POST(request: NextRequest) {
 
     if (jobError) {
       console.error('Failed to create render job:', jobError);
-      // Refund: render submitted upstream but we can't track it
+      // The render was accepted by Shotstack but we have no render_jobs row to
+      // poll it from — it would run to completion, billable, fully orphaned.
+      // Cancel it upstream (best-effort: a render already past `queued` can't
+      // be stopped), then refund the credit and surface the failure.
+      try {
+        await cancelRender(shotstackRenderId);
+      } catch (cancelError) {
+        console.error('[shotstack/render] failed to cancel orphaned render', {
+          editId,
+          shotstackRenderId,
+          error: errorMessage(cancelError).slice(0, 500),
+        });
+      }
       await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
       return NextResponse.json({ error: 'Failed to create render job' }, { status: 500 });
     }

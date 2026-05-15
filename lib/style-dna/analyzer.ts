@@ -89,6 +89,17 @@ export async function analyzeReferenceVideos(
     throw new Error('At least one reference is required');
   }
 
+  // FFmpeg + FFprobe drive every stage of real analysis (scene detection,
+  // audio extraction, frame sampling). If the binaries didn't bundle into the
+  // serverless runtime, fail loudly here rather than silently returning
+  // fabricated heuristic DNA (confidence 0.25) that the editor can't tell
+  // apart from a real result.
+  if (!(await isFfmpegAvailable())) {
+    throw new Error(
+      'Style DNA analysis is unavailable: the video processing engine (FFmpeg) is not reachable in this environment. No edit was charged — please retry shortly or contact support if this persists.'
+    );
+  }
+
   const styleRefs: StyleReference[] = references.map((ref) => ({
     source_type: looksLikeUrl(ref.url) && detectPlatform(ref.url) ? 'url' : 'upload',
     type: ref.type ?? inferReferenceType(ref.url),
@@ -185,13 +196,10 @@ async function analyzeSingleReference(
   ref: StyleReference,
   options: AnalyzeOptions
 ): Promise<SingleAnalysisResult> {
-  // If FFmpeg isn't available in this environment, fall back to a heuristic
-  // analysis so the editor still gets a usable StyleDNA. Local dev without the
-  // installer hits this path; production should always have the binary.
-  if (!(await isFfmpegAvailable())) {
-    console.log('[style-dna] FFmpeg not available, using heuristic fallback');
-    return heuristicFallback(ref);
-  }
+  // FFmpeg availability is verified up-front in `analyzeReferenceVideos`, so
+  // by the time we get here the binaries are reachable. The heuristic fallback
+  // below is reserved for *partial* failures (a single malformed reference, a
+  // stalled download) — never for a missing-binary environment.
 
   // Race the full pipeline against a per-reference wall clock. If anything
   // hangs (DNS stall on a presigned URL, ffmpeg stuck on a malformed atom,

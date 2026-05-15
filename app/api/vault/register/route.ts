@@ -6,10 +6,17 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
-import { headR2, parseVaultKey, type VaultFolder } from '@/lib/cloudflare/r2';
+import {
+  headR2,
+  parseVaultKey,
+  parseEditorMediaKey,
+  type VaultFolder,
+} from '@/lib/cloudflare/r2';
 import {
   registerVaultFile,
   mimeFromFilename,
+  kindForContentType,
+  defaultFolderForKind,
   type VaultSource,
 } from '@/lib/vault';
 
@@ -34,11 +41,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing r2Key' }, { status: 400 });
     }
 
-    const parsed = parseVaultKey(r2Key);
-    if (!parsed) {
-      return NextResponse.json({ error: 'Invalid vault key' }, { status: 400 });
+    // Accept both vault keys (`users/{uid}/vault/{folder}/...`) and editor
+    // source/reference media keys (`sources|references/{uid}/{editId}/...`).
+    const vaultParsed = parseVaultKey(r2Key);
+    const editorParsed = vaultParsed ? null : parseEditorMediaKey(r2Key);
+    const ownerId = vaultParsed?.userId ?? editorParsed?.userId ?? null;
+    if (!ownerId) {
+      return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
     }
-    if (parsed.userId !== user.id) {
+    if (ownerId !== user.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -53,9 +64,15 @@ export async function POST(request: NextRequest) {
     }
     const size = head.size || Number(body.sizeBytes ?? 0);
 
-    const filename = (body.filename ?? parsed.filename).toString();
+    const fallbackFilename = vaultParsed?.filename ?? editorParsed?.filename ?? 'file';
+    const filename = (body.filename ?? fallbackFilename).toString();
     const contentType =
       (body.contentType ?? head.contentType ?? mimeFromFilename(filename)).toString();
+
+    // Vault keys carry their folder; editor keys don't, so derive it from the
+    // media kind (video → footage, image/audio → references).
+    const folder: VaultFolder =
+      body.folder ?? vaultParsed?.folder ?? defaultFolderForKind(kindForContentType(contentType));
 
     const file = await registerVaultFile({
       userId: user.id,
@@ -63,7 +80,7 @@ export async function POST(request: NextRequest) {
       filename,
       contentType,
       sizeBytes: size,
-      folder: body.folder ?? parsed.folder,
+      folder,
       source: body.source ?? 'upload',
       editId: body.editId ?? null,
       externalUrl: body.externalUrl ?? null,

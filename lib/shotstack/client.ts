@@ -68,6 +68,27 @@ export async function submitRender(config: ShotstackRenderConfig): Promise<strin
   return data.response.id;
 }
 
+/**
+ * Cancel an in-flight Shotstack render. Used when we accepted a render upstream
+ * but then failed to persist a job row to track it — without a cancel the
+ * render runs to completion, billable, with nothing polling it.
+ *
+ * Shotstack only cancels renders that are still `queued`/`fetching`; a render
+ * already in `rendering` cannot be stopped. The caller treats this as
+ * best-effort and should log (not fail) if it throws.
+ */
+export async function cancelRender(renderId: string): Promise<void> {
+  const { apiUrl } = getShotstackConfig();
+  const response = await fetch(`${apiUrl}/render/${renderId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Shotstack cancel failed: ${response.status} — ${error}`);
+  }
+}
+
 export function summarizeShotstackConfig(config: ShotstackRenderConfig): {
   tracks: number;
   clips: number;

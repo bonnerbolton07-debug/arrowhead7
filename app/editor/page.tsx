@@ -154,6 +154,29 @@ function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind
   return `${scope}-${kind}` as UploadKind['kind'];
 }
 
+/**
+ * Index a finished editor upload into the user's vault. Best-effort: the render
+ * pipeline reads the R2 key directly, so a failed registration never blocks the
+ * edit — it only means the file won't appear in the vault browser. Fire-and-forget.
+ */
+async function registerEditorUpload(r2Key: string, file: File): Promise<void> {
+  try {
+    await fetch('/api/vault/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        r2Key,
+        filename: file.name,
+        contentType: file.type || undefined,
+        sizeBytes: file.size,
+        source: 'upload',
+      }),
+    });
+  } catch {
+    // Non-fatal — vault indexing is a mirror, not a dependency of rendering.
+  }
+}
+
 function countByKind(items: ReferenceItem[]) {
   return items.reduce(
     (counts, item) => {
@@ -571,6 +594,7 @@ function EditorPageInner() {
         totalBytes: file.size,
         retryingAttempt: undefined,
       });
+      void registerEditorUpload(key, file);
     } catch (err) {
       updateReference(id, {
         status: 'error',
@@ -809,6 +833,7 @@ function EditorPageInner() {
         totalBytes: file.size,
         retryingAttempt: undefined,
       });
+      void registerEditorUpload(key, file);
 
       if (kind === 'video') {
         setFootageR2Key((current) => current ?? key);
