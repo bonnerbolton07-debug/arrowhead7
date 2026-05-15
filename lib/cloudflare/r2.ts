@@ -132,11 +132,11 @@ export async function deleteFromR2(key: string): Promise<void> {
 // ─── Key Generation ──────────────────────────────────────────────────────────
 
 /**
- * Generate a unique R2 key for a source video upload.
+ * Generate a unique R2 key for source media uploads.
  */
 export function generateSourceKey(userId: string, editId: string, filename: string): string {
   const ext = safeExtension(filename, 'mp4');
-  return `sources/${userId}/${editId}/source.${ext}`;
+  return `sources/${userId}/${editId}/${randomUUID()}.${ext}`;
 }
 
 /**
@@ -147,10 +147,10 @@ export function generateProcessingKey(editId: string, step: string): string {
 }
 
 /**
- * Generate a key for a mood-board reference image used by Style DNA.
+ * Generate a key for reference media used by Style DNA.
  * Keys land under `references/` so the analyzer can recognise them.
  */
-export function generateReferenceImageKey(userId: string, editId: string, filename: string): string {
+export function generateReferenceMediaKey(userId: string, editId: string, filename: string): string {
   const ext = safeExtension(filename, 'jpg');
   const slug = randomUUID();
   return `references/${userId}/${editId}/${slug}.${ext}`;

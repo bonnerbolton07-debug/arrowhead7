@@ -30,6 +30,16 @@ const ALLOWED_IMAGE = new Set([
   'image/heif',
   'image/avif',
 ]);
+const ALLOWED_AUDIO = new Set([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/flac',
+]);
 
 export const dynamic = 'force-dynamic';
 
@@ -51,7 +61,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const allowed =
-      ALLOWED_VIDEO.has(contentType) || ALLOWED_IMAGE.has(contentType);
+      ALLOWED_VIDEO.has(contentType) || ALLOWED_IMAGE.has(contentType) || ALLOWED_AUDIO.has(contentType);
     if (!allowed) {
       return NextResponse.json(
         { error: 'Unsupported file type' },

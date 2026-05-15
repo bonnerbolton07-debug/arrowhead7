@@ -24,7 +24,7 @@ import {
   completeMultipartUpload,
   abortMultipartUpload,
   generateSourceKey,
-  generateReferenceImageKey,
+  generateReferenceMediaKey,
 } from '@/lib/cloudflare/r2';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -33,8 +33,10 @@ export const dynamic = 'force-dynamic';
 
 const ALLOWED_VIDEO = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
 const ALLOWED_IMAGE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif', 'image/avif']);
+const ALLOWED_AUDIO = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/mp4', 'audio/ogg', 'audio/flac']);
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
@@ -51,24 +53,27 @@ export async function POST(request: NextRequest) {
         if (typeof filename !== 'string' || filename.length > 180 || /[\\/]/.test(filename)) {
           return NextResponse.json({ error: 'Invalid filename' }, { status: 400 });
         }
-        const isImage = kind === 'reference-image';
-        const allowed = isImage ? ALLOWED_IMAGE : ALLOWED_VIDEO;
+        const kindLabel = typeof kind === 'string' ? kind : '';
+        const isReference = kindLabel.startsWith('reference-');
+        const isImage = kindLabel.endsWith('image');
+        const isAudio = kindLabel.endsWith('audio');
+        const allowed = isImage ? ALLOWED_IMAGE : isAudio ? ALLOWED_AUDIO : ALLOWED_VIDEO;
         if (!allowed.has(contentType)) {
           return NextResponse.json({ error: 'Unsupported content type' }, { status: 400 });
         }
         if (typeof size !== 'number') {
           return NextResponse.json({ error: 'Missing file size' }, { status: 400 });
         }
-        const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+        const maxBytes = isImage ? MAX_IMAGE_BYTES : isAudio ? MAX_AUDIO_BYTES : MAX_VIDEO_BYTES;
         if (!Number.isFinite(size) || size <= 0 || size > maxBytes) {
           return NextResponse.json(
-            { error: isImage ? 'Image must be 25MB or smaller.' : 'Video must be 500MB or smaller.' },
+            { error: isImage ? 'Image must be 25MB or smaller.' : isAudio ? 'Audio must be 100MB or smaller.' : 'Video must be 500MB or smaller.' },
             { status: 400 }
           );
         }
         const id = editId || uuidv4();
-        const key = isImage
-          ? generateReferenceImageKey(user.id, id, filename)
+        const key = isReference
+          ? generateReferenceMediaKey(user.id, id, filename)
           : generateSourceKey(user.id, id, filename);
         const { uploadId } = await createMultipartUpload(key, contentType);
         return NextResponse.json({ uploadId, key, editId: id });

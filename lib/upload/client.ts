@@ -76,7 +76,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export interface UploadKind {
-  kind?: 'reference-image' | 'source';
+  kind?: 'reference-video' | 'reference-image' | 'reference-audio' | 'source-video' | 'source-image' | 'source-audio' | 'source';
 }
 
 export interface UploadResult {
@@ -137,6 +137,7 @@ export interface UploadOptions extends UploadKind {
   /** Called after every successful part finishes. Caller persists the state
    *  to React state / localStorage so a hard failure leaves a resume point. */
   onResumeStateChange?: (state: UploadResumeState) => void;
+  editId?: string;
 }
 
 /**
@@ -160,7 +161,8 @@ async function uploadSingle(file: File, opts: UploadOptions): Promise<UploadResu
       filename: file.name,
       contentType: file.type,
       size: file.size,
-      kind: opts.kind === 'reference-image' ? 'reference-image' : undefined,
+      kind: opts.kind,
+      editId: opts.editId,
     }),
     signal: opts.signal,
   });
@@ -242,7 +244,8 @@ async function uploadMultipart(file: File, opts: UploadOptions): Promise<UploadR
         filename: file.name,
         contentType: file.type,
         size: file.size,
-        kind: opts.kind === 'reference-image' ? 'reference-image' : undefined,
+        kind: opts.kind,
+        editId: opts.editId,
       }),
       signal: opts.signal,
     });

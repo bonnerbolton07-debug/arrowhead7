@@ -68,6 +68,7 @@ export interface Resolution {
  *
  * Reference sources can be:
  * - Uploaded video files
+ * - Uploaded audio / music / sound-effect files
  * - Social media URLs (IG reels, TikTok, YouTube, X)
  * - Multiple references blended into a composite style
  */
@@ -110,12 +111,12 @@ export interface StyleDNA {
   updated_at: string;
 }
 
-/** A single reference (video OR still image) used to build Style DNA */
+/** A single reference (video, audio, or still image) used to build Style DNA */
 export interface StyleReference {
   source_type: 'upload' | 'url';
   /** What kind of media this reference is. Images contribute to color/framing
-   *  only; videos drive cut rhythm, pacing, audio, and motion. */
-  type: 'video' | 'image';
+   *  only; audio contributes rhythm/music cues; videos drive the full profile. */
+  type: 'video' | 'image' | 'audio';
   url: string;                          // R2 key or social media URL
   platform?: 'instagram' | 'tiktok' | 'youtube' | 'x' | 'other';
   creator_handle?: string;              // @creator if from social
@@ -265,6 +266,17 @@ export interface ShotstackRenderConfig {
   timeline: ShotstackTimeline;
   output: ShotstackOutput;
   merge?: ShotstackMergeField[];
+}
+
+export interface SupplementalMediaAsset {
+  type: 'video' | 'image' | 'audio';
+  url: string;
+  label?: string;
+}
+
+export interface EditDirectionMetadata {
+  prompt: string;
+  generated_at: string;
 }
 
 /** Simplified Shotstack timeline */

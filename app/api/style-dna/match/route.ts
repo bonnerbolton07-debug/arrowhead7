@@ -35,8 +35,14 @@ const Body = z.object({
     outputFps: z.number().min(15).max(60).optional(),
     hookText: z.string().optional(),
     ctaText: z.string().optional(),
+    editPrompt: z.string().max(500).optional(),
     generateSoundtrack: z.boolean().optional(),
     referenceSoundtrackKey: z.string().optional(),
+    sourceMedia: z.array(z.object({
+      type: z.enum(['video', 'image', 'audio']),
+      url: z.string().min(1),
+      label: z.string().optional(),
+    })).max(20).optional(),
     captions: z.object({
       transcription: z.unknown(),
       style: z.enum(['tiktok-bold', 'youtube-bar', 'karaoke']),
@@ -81,9 +87,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Edit has no source footage' }, { status: 400 });
     }
 
-    const sourceKey = edit.source_video_url;
+    const sourceMedia = options?.sourceMedia ?? [];
+    const primaryMedia = sourceMedia.find((m) => m.type === 'video') ?? null;
+    const sourceKey = primaryMedia?.url ?? edit.source_video_url;
     // Shotstack needs a publicly-fetchable URL; we hand it a 6h presigned URL.
-    const renderableUrl = await getPresignedDownloadUrl(sourceKey, 6 * 3600);
+    const renderableUrl = await resolveRenderableUrl(sourceKey);
+    const renderableSourceMedia = await Promise.all(
+      sourceMedia.map(async (asset) => ({
+        ...asset,
+        url: await resolveRenderableUrl(asset.url),
+      }))
+    );
 
     // Analyse source footage locally. This is enhancement, not a hard gate:
     // if download/ffmpeg stalls, render still proceeds with a sane timeline.
@@ -139,6 +153,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const promptDirection = options?.editPrompt?.trim();
+    const suppressText = promptDirection
+      ? /\b(no|remove|without)\s+(text|titles|captions|words|copy)\b/i.test(promptDirection)
+      : false;
     const renderConfig = buildTimelineFromStyleDNA({
       sourceVideoUrl: renderableUrl,
       styleDNA: dna,
@@ -149,8 +167,10 @@ export async function POST(request: NextRequest) {
         outputFormat: options?.outputFormat,
         outputResolution: options?.outputResolution,
         outputFps: options?.outputFps,
-        hookText: options?.hookText,
-        ctaText: options?.ctaText,
+        hookText: suppressText ? undefined : options?.hookText,
+        ctaText: suppressText ? undefined : options?.ctaText,
+        editPrompt: promptDirection || undefined,
+        sourceMedia: renderableSourceMedia,
         captions: options?.captions ? {
           transcription: options.captions.transcription as any,
           style: options.captions.style,
@@ -178,6 +198,11 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function resolveRenderableUrl(value: string): Promise<string> {
+  if (/^https?:\/\//i.test(value)) return value;
+  return getPresignedDownloadUrl(value, 6 * 3600);
 }
 
 function scenesToSegments(cuts: number[], fallbackDuration = 30) {

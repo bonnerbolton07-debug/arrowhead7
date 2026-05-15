@@ -111,7 +111,7 @@ export function mimeFromFilename(name: string): string {
 }
 
 export function defaultFolderForKind(kind: VaultKind): VaultFolder {
-  return kind === 'image' ? 'references' : 'footage';
+  return kind === 'video' ? 'footage' : 'references';
 }
 
 /**

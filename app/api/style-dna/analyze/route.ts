@@ -25,7 +25,7 @@ const Body = z.object({
   references: z.array(
     z.object({
       url: z.string().min(1),
-      type: z.enum(['video', 'image']).optional(),
+      type: z.enum(['video', 'image', 'audio']).optional(),
       platform: z.enum(['instagram', 'tiktok', 'youtube', 'x', 'other']).optional(),
       weight: z.number().min(0).max(1).optional(),
     })

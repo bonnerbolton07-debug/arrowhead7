@@ -48,8 +48,8 @@ import {
 export interface AnalyzeReferenceInput {
   /** R2 key, presigned URL, HTTPS URL, or social-media URL */
   url: string;
-  /** 'video' (default) drives the full DNA; 'image' contributes color/framing only. */
-  type?: 'video' | 'image';
+  /** 'video' drives the full DNA; 'image' contributes color/framing; audio contributes rhythm/music cues. */
+  type?: 'video' | 'image' | 'audio';
   platform?: StyleReference['platform'];
   /** Blend weight when multiple references are provided. Optional. */
   weight?: number;
@@ -110,11 +110,15 @@ export async function analyzeReferenceVideos(
 }
 
 /** Infer the reference media type from its URL/key. Defaults to 'video'. */
-function inferReferenceType(url: string): 'video' | 'image' {
+function inferReferenceType(url: string): 'video' | 'image' | 'audio' {
   const lower = url.toLowerCase().split('?')[0];
   if (/\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/.test(lower)) return 'image';
+  if (/\.(mp3|wav|m4a|aac|ogg|oga|flac|aiff?)$/.test(lower)) return 'audio';
   if (lower.includes('/references/') && /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)/.test(lower)) {
     return 'image';
+  }
+  if (lower.includes('/references/') && /\.(mp3|wav|m4a|aac|ogg|oga|flac|aiff?)$/.test(lower)) {
+    return 'audio';
   }
   return 'video';
 }
@@ -198,6 +202,9 @@ async function analyzeSingleReference(
   if (ref.type === 'image') {
     return await analyzeImageReference(ref);
   }
+  if (ref.type === 'audio') {
+    return await analyzeAudioReference(ref, options);
+  }
 
   const resolved = await resolveSource(ref.url);
   try {
@@ -267,6 +274,72 @@ async function analyzeSingleReference(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function analyzeAudioReference(
+  ref: StyleReference,
+  options: AnalyzeOptions
+): Promise<SingleAnalysisResult> {
+  const resolved = await resolveSource(ref.url);
+  try {
+    const analyzeDuration = options.maxAnalyzeSeconds ?? 90;
+    const audio = await analyzeAudio(resolved.path, true, analyzeDuration);
+    const duration = audio.duration_seconds || analyzeDuration;
+    const cuts = buildAudioCueCuts(duration, audio.beats);
+    const cutPattern = analyseCutPattern(cuts, [], audio, duration);
+    const metadata: VideoMetadata = {
+      duration,
+      width: 1080,
+      height: 1920,
+      fps: 0,
+      codec: 'audio',
+      has_audio: true,
+    };
+    return {
+      metadata,
+      cutPattern,
+      colorProfile: { temperature: 0, saturation: 100, contrast: 100, brightness: 100 },
+      framingProfile: deriveFramingProfile(metadata),
+      pacing: derivePacing(cutPattern, audio, duration),
+      energyArc: deriveEnergyArc(cutPattern, audio, [], duration),
+      transitions: deriveTransitions([]),
+      audioSync: audio.beats.length > 3 ? 'beat-sync' : 'energy-match',
+      audioEditRelationship: deriveAudioEditRelationship(cuts, audio),
+      motionProfile: {
+        uses_speed_ramps: false,
+        speed_ramp_style: 'smooth',
+        uses_zoom_punches: false,
+        zoom_punch_frequency: 0,
+        uses_shake: false,
+        uses_parallax: false,
+        dominant_movement: 'static',
+      },
+      narrativeStructure: deriveNarrativeStructure(cutPattern, audio, {
+        shape: 'wave',
+        curve: audio.energy_curve.length > 0 ? audio.energy_curve.slice(0, 10) : new Array(10).fill(0.5),
+        has_cold_open: true,
+        climax_position: 0.75,
+      }, duration),
+      confidence: 0.55,
+      audio,
+      frames: [],
+      rawCuts: cuts,
+    };
+  } finally {
+    if (resolved.ephemeral) await unlinkQuiet(resolved.path);
+  }
+}
+
+function buildAudioCueCuts(duration: number, beats: number[]): number[] {
+  const safeDuration = Math.max(2, Math.min(duration || 30, 180));
+  const cueBeats = beats
+    .filter((b) => b > 0 && b < safeDuration)
+    .filter((b, i, arr) => i === 0 || b - arr[i - 1] >= 0.5)
+    .slice(0, 80);
+  const cuts = cueBeats.length >= 3
+    ? [0, ...cueBeats, safeDuration]
+    : Array.from({ length: Math.ceil(safeDuration / 2) + 1 }, (_, i) => Math.min(safeDuration, i * 2));
+  return Array.from(new Set(cuts.map((c) => Number(c.toFixed(3))))).sort((a, b) => a - b);
 }
 
 /**
@@ -1121,8 +1194,9 @@ function blendAnalyses(
         })),
         primary_index: primaryGlobalIdx,
         dominant_palette: aggregatePalette,
-        video_count: videoIdx.length,
-        image_count: refs.length - videoIdx.length,
+        video_count: refs.filter((r) => r.type === 'video').length,
+        image_count: refs.filter((r) => r.type === 'image').length,
+        audio_count: refs.filter((r) => r.type === 'audio').length,
       },
     },
   };

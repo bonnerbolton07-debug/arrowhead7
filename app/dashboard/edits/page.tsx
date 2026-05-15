@@ -57,7 +57,7 @@ export default async function EditsPage() {
   return (
     <DashboardShell
       title="My Edits"
-      subtitle="Every edit you've started, in progress, or completed."
+      subtitle="Completed edits, drafts, and variations saved in one place."
       actions={
         <a
           href="/editor"

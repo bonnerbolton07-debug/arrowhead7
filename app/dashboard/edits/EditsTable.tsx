@@ -157,12 +157,11 @@ function EditCard({ edit }: { edit: EditListRow }) {
   const href = isActionable
     ? edit.output_video_url ?? '#'
     : `/editor?id=${edit.id}`;
+  const variantHref = `/editor?id=${edit.id}&variant=1`;
+  const addMediaHref = `/editor?id=${edit.id}&variant=1#media`;
 
   return (
-    <a
-      href={href}
-      target={isActionable ? '_blank' : undefined}
-      rel={isActionable ? 'noopener noreferrer' : undefined}
+    <article
       className="relative overflow-hidden rounded-lg transition-all hover:scale-[1.01] block group"
       style={{
         background: 'linear-gradient(180deg, #10100E, #0C0C0A)',
@@ -225,8 +224,48 @@ function EditCard({ edit }: { edit: EditListRow }) {
             </span>
           )}
         </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <a
+            href={href}
+            target={isActionable ? '_blank' : undefined}
+            rel={isActionable ? 'noopener noreferrer' : undefined}
+            className="px-3 py-2 rounded-md text-xs font-medium text-center transition-all"
+            style={{
+              background: 'rgba(245,240,232,0.04)',
+              border: '1px solid rgba(245,240,232,0.08)',
+              color: 'rgba(245,240,232,0.62)',
+            }}
+          >
+            {isActionable ? 'View' : 'Resume'}
+          </a>
+          <a
+            href={variantHref}
+            className="px-3 py-2 rounded-md text-xs font-medium text-center transition-all"
+            style={{
+              background: 'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+              border: '1px solid rgba(45,212,191,0.22)',
+              color: '#5BE8D5',
+            }}
+          >
+            Variation
+          </a>
+        </div>
+        {edit.status === 'completed' && (
+          <a
+            href={addMediaHref}
+            className="mt-2 block px-3 py-2 rounded-md text-xs font-medium text-center transition-all"
+            style={{
+              background: 'linear-gradient(135deg, rgba(184,115,51,0.1), rgba(184,115,51,0.03))',
+              border: '1px solid rgba(184,115,51,0.22)',
+              color: '#E8B06A',
+            }}
+          >
+            Add media / refs
+          </a>
+        )}
       </div>
-    </a>
+    </article>
   );
 }
 
@@ -249,7 +288,7 @@ function EmptyState() {
       <FilmIcon size={36} gradient="teal" className="mx-auto mb-4 opacity-40" />
       <h3 className="text-base font-semibold text-a7-text mb-1">No edits yet</h3>
       <p className="text-a7-text/40 text-sm mb-6 max-w-sm mx-auto">
-        Drop in a reference video and your raw footage. A7 will assemble the edit
+        Drop in references and source media. A7 will assemble the edit
         and you&rsquo;ll see it here.
       </p>
       <a

@@ -11,6 +11,8 @@ import type {
   ShotstackClip,
   ShotstackOutput,
   StyleDNA,
+  SupplementalMediaAsset,
+  EditDirectionMetadata,
 } from '@/types/edit';
 import {
   buildRenderConfig,
@@ -123,6 +125,10 @@ export interface BuildTimelineOptions extends Omit<MatcherOptions, 'sourceVideoU
   };
   /** Subscription tier — drives watermark inclusion when set. */
   tier?: SubscriptionTier | string | null;
+  /** Extra source assets selected by the creator: b-roll, stills, music, and SFX. */
+  sourceMedia?: SupplementalMediaAsset[];
+  /** Creator's free-form director note for this render or variation. */
+  editPrompt?: string;
 }
 
 export interface BuildTimelineInput {
@@ -205,6 +211,81 @@ export function buildTimelineFromStyleDNA(
     }
   }
 
+  if (options.sourceMedia && options.sourceMedia.length > 1) {
+    baseConfig = addSupplementalMedia(baseConfig, options.sourceMedia, options.targetDuration ?? 30);
+  }
+
+  if (options.editPrompt?.trim()) {
+    baseConfig = attachEditDirection(baseConfig, options.editPrompt);
+  }
+
   if (options.tier === undefined) return baseConfig;
   return applyWatermarkIfRequired(baseConfig, options.tier);
+}
+
+function attachEditDirection(config: ShotstackRenderConfig, prompt: string): ShotstackRenderConfig {
+  const metadata: EditDirectionMetadata = {
+    prompt: prompt.trim().slice(0, 500),
+    generated_at: new Date().toISOString(),
+  };
+  return {
+    ...config,
+    merge: [
+      ...(config.merge ?? []),
+      { find: 'A7_EDIT_DIRECTION', replace: metadata.prompt },
+      { find: 'A7_EDIT_DIRECTION_AT', replace: metadata.generated_at },
+    ],
+  };
+}
+
+function addSupplementalMedia(
+  config: ShotstackRenderConfig,
+  media: SupplementalMediaAsset[],
+  targetDuration: number
+): ShotstackRenderConfig {
+  const supplemental = media.slice(1);
+  const visualAssets = supplemental.filter((asset) => asset.type === 'image' || asset.type === 'video');
+  const audioAssets = supplemental.filter((asset) => asset.type === 'audio');
+  const tracks: ShotstackTrack[] = [...config.timeline.tracks];
+
+  if (visualAssets.length > 0) {
+    const slotLength = Math.max(1.5, Math.min(3, targetDuration / Math.max(3, visualAssets.length + 1)));
+    const clips: ShotstackClip[] = visualAssets.slice(0, 8).map((asset, index) => {
+      const start = Math.min(Math.max(0, targetDuration - slotLength), (index + 1) * (targetDuration / (visualAssets.length + 1)));
+      return {
+        asset: {
+          type: asset.type,
+          src: asset.url,
+          volume: asset.type === 'video' ? 0 : undefined,
+        },
+        start: Number(start.toFixed(3)),
+        length: Number(slotLength.toFixed(3)),
+        effect: asset.type === 'image' ? 'zoomIn' : undefined,
+        transition: { in: 'fade', out: 'fade' },
+      };
+    });
+    tracks.unshift({ clips });
+  }
+
+  if (audioAssets.length > 0) {
+    const clips: ShotstackClip[] = audioAssets.slice(0, 3).map((asset, index) => ({
+      asset: {
+        type: 'audio',
+        src: asset.url,
+        volume: index === 0 ? 0.45 : 0.28,
+        effect: 'fadeInFadeOut',
+      },
+      start: index === 0 ? 0 : Math.min(targetDuration - 1, index * Math.max(4, targetDuration / 3)),
+      length: targetDuration,
+    }));
+    tracks.push({ clips });
+  }
+
+  return {
+    ...config,
+    timeline: {
+      ...config.timeline,
+      tracks,
+    },
+  };
 }

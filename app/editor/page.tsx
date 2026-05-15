@@ -20,6 +20,7 @@ import {
   maybeCompressImage,
   type UploadProgress,
   type UploadResumeState,
+  type UploadKind,
 } from '@/lib/upload/client';
 import { VaultPicker } from '@/components/vault/VaultPicker';
 import { VaultIcon } from '@/components/ui/icons';
@@ -51,7 +52,7 @@ type CaptionStyle = 'tiktok-bold' | 'youtube-bar' | 'karaoke';
 type CaptionState = 'idle' | 'transcribing' | 'done' | 'error' | 'unavailable';
 
 type RefSource = 'upload' | 'url';
-type RefKind = 'video' | 'image';
+type RefKind = 'video' | 'image' | 'audio';
 type RefStatus = 'uploading' | 'ready' | 'error';
 
 interface ReferenceItem {
@@ -98,9 +99,20 @@ const ALLOWED_IMAGE_MIME = new Set([
   'image/heif',
   'image/avif',
 ]);
+const ALLOWED_AUDIO_MIME = new Set([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/flac',
+]);
 const ALLOWED_MIME = new Set<string>([
   ...Array.from(ALLOWED_VIDEO_MIME),
   ...Array.from(ALLOWED_IMAGE_MIME),
+  ...Array.from(ALLOWED_AUDIO_MIME),
 ]);
 
 function makeId() {
@@ -108,12 +120,16 @@ function makeId() {
 }
 
 function inferKindFromMime(mime: string): RefKind {
-  return ALLOWED_IMAGE_MIME.has(mime) ? 'image' : 'video';
+  if (ALLOWED_IMAGE_MIME.has(mime)) return 'image';
+  if (ALLOWED_AUDIO_MIME.has(mime)) return 'audio';
+  return 'video';
 }
 
 function inferKindFromUrl(url: string): RefKind {
   const path = url.toLowerCase().split('?')[0];
-  return /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/.test(path) ? 'image' : 'video';
+  if (/\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|tiff?)$/.test(path)) return 'image';
+  if (/\.(mp3|wav|m4a|aac|ogg|oga|flac|aiff?)$/.test(path)) return 'audio';
+  return 'video';
 }
 
 function classNames(...parts: Array<string | false | null | undefined>) {
@@ -121,7 +137,42 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 }
 
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
+const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const STYLE_DNA_CLIENT_FALLBACK_MS = 40_000;
+
+function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind['kind'] {
+  return `${scope}-${kind}` as UploadKind['kind'];
+}
+
+function makeUuid() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function validateMediaFile(file: File, context: 'reference' | 'source'): string | null {
+  if (!ALLOWED_MIME.has(file.type)) {
+    return context === 'reference'
+      ? 'Format not supported — use video, image, music, or SFX files.'
+      : 'Format not supported — use video, image, music, or SFX files.';
+  }
+  const kind = inferKindFromMime(file.type);
+  const maxBytes = kind === 'audio' ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+  if (file.size > maxBytes) {
+    return kind === 'audio' ? 'Audio must be 100MB or smaller.' : 'File too large (max 500MB)';
+  }
+  return null;
+}
+
+function extractEditDirection(renderConfig: unknown): string {
+  if (!renderConfig || typeof renderConfig !== 'object') return '';
+  const merge = (renderConfig as { merge?: unknown }).merge;
+  if (!Array.isArray(merge)) return '';
+  const field = merge.find((item) => {
+    if (!item || typeof item !== 'object') return false;
+    return (item as { find?: unknown }).find === 'A7_EDIT_DIRECTION';
+  }) as { replace?: unknown } | undefined;
+  return typeof field?.replace === 'string' ? field.replace : '';
+}
 
 function friendlyUploadError(err: unknown, status?: number): string {
   if (status === 413) return 'File too large (max 500MB)';
@@ -275,13 +326,14 @@ function EditorPageInner() {
   const strategyBrief = useStrategyBrief();
   const searchParams = useSearchParams();
   const resumeId = searchParams?.get('id') ?? null;
+  const isVariantRequest = searchParams?.get('variant') === '1';
   const [step, setStep] = useState<Step>('reference');
   const [resumeState, setResumeState] = useState<'idle' | 'loading' | 'done' | 'error'>(
     resumeId ? 'loading' : 'idle'
   );
   const [resumeError, setResumeError] = useState<string | null>(null);
 
-  // Step 1 — References (multiple videos and/or images)
+  // Step 1 — References (multiple videos, images, audio, and URLs)
   const [references, setReferences] = useState<ReferenceItem[]>([]);
   const [pendingUrl, setPendingUrl] = useState('');
   const [referenceError, setReferenceError] = useState<string | null>(null);
@@ -289,9 +341,11 @@ function EditorPageInner() {
   // Derived: do we have at least one ready reference?
   const readyRefs = references.filter((r) => r.status === 'ready');
   const hasReadyRef = readyRefs.length > 0;
-  // First soundtrack candidate: the highest-priority *video* reference uploaded
-  // to R2 (so we can shell it back to the soundtrack generator if requested).
-  const soundtrackR2Key = readyRefs.find((r) => r.kind === 'video' && r.source === 'upload')?.url ?? null;
+  // First soundtrack candidate: uploaded music/SFX wins, with video as fallback.
+  const soundtrackR2Key =
+    readyRefs.find((r) => r.kind === 'audio' && r.source === 'upload')?.url
+    ?? readyRefs.find((r) => r.kind === 'video' && r.source === 'upload')?.url
+    ?? null;
 
   // Step 2 — Footage
   const [footageFile, setFootageFile] = useState<File | null>(null);
@@ -301,6 +355,11 @@ function EditorPageInner() {
   const [editId, setEditId] = useState<string | null>(null);
   const [footageError, setFootageError] = useState<string | null>(null);
   const [footageResumeState, setFootageResumeState] = useState<UploadResumeState | null>(null);
+  const [sourceAssets, setSourceAssets] = useState<ReferenceItem[]>([]);
+
+  const readySourceAssets = sourceAssets.filter((r) => r.status === 'ready');
+  const primarySourceAsset = readySourceAssets.find((r) => r.kind === 'video') ?? null;
+  const hasReadySourceVideo = Boolean(primarySourceAsset || footageR2Key);
 
   // Step 3 — Style DNA analysis
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle');
@@ -317,6 +376,9 @@ function EditorPageInner() {
   const [generateSoundtrack, setGenerateSoundtrack] = useState<boolean>(false);
   const [hookText, setHookText] = useState<string>('');
   const [ctaText, setCtaText] = useState<string>('');
+  const [editPrompt, setEditPrompt] = useState<string>('');
+  const [variantSourceId, setVariantSourceId] = useState<string | null>(null);
+  const [variantNotice, setVariantNotice] = useState<string | null>(null);
   const [matchState, setMatchState] = useState<'idle' | 'matching' | 'ready' | 'error'>('idle');
   const [matchError, setMatchError] = useState<string | null>(null);
   const [autoCaptions, setAutoCaptions] = useState(false);
@@ -425,7 +487,7 @@ function EditorPageInner() {
     });
     try {
       const { key } = await uploadToR2(file, {
-        kind: kind === 'image' ? 'reference-image' : 'source',
+        kind: uploadKindFor('reference', kind),
         resumeFrom,
         onProgress: (p: UploadProgress) =>
           updateReference(id, {
@@ -458,12 +520,9 @@ function EditorPageInner() {
   }, [updateReference]);
 
   const uploadReferenceFile = useCallback(async (rawFile: File) => {
-    if (!ALLOWED_MIME.has(rawFile.type)) {
-      setReferenceError('Format not supported — use MP4, MOV, WebM or JPG/PNG/WebP/HEIC/AVIF');
-      return;
-    }
-    if (rawFile.size > MAX_UPLOAD_BYTES) {
-      setReferenceError('File too large (max 500MB)');
+    const validationError = validateMediaFile(rawFile, 'reference');
+    if (validationError) {
+      setReferenceError(validationError);
       return;
     }
     setReferenceError(null);
@@ -538,10 +597,10 @@ function EditorPageInner() {
     setReferences((prev) => [
       ...prev,
       ...picked
-        .filter((f) => f.kind === 'video' || f.kind === 'image')
+        .filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio')
         .map<ReferenceItem>((f) => ({
           id: makeId(),
-          kind: f.kind === 'image' ? 'image' : 'video',
+          kind: f.kind === 'audio' ? 'audio' : f.kind === 'image' ? 'image' : 'video',
           source: 'upload',
           url: f.r2_key,
           label: f.filename,
@@ -550,7 +609,190 @@ function EditorPageInner() {
     ]);
   }, []);
 
-  // ─── Step 2: Footage Upload ─────────────────────────────────────────────
+  // ─── Step 2: Source media uploads ───────────────────────────────────────
+  const updateSourceAsset = useCallback((id: string, patch: Partial<ReferenceItem>) => {
+    setSourceAssets((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }, []);
+
+  const removeSourceAsset = useCallback((id: string) => {
+    setSourceAssets((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (target?.previewUrl && target.source === 'upload') {
+        try {
+          URL.revokeObjectURL(target.previewUrl);
+        } catch {
+          // ignore
+        }
+      }
+      const next = prev.filter((r) => r.id !== id);
+      const nextPrimary = next.find((r) => r.status === 'ready' && r.kind === 'video') ?? null;
+      setFootageR2Key(nextPrimary?.url ?? null);
+      if (!nextPrimary) {
+        setFootageFile(null);
+        setFootageUploadState('idle');
+        setFootageProgress(null);
+      }
+      return next;
+    });
+  }, []);
+
+  const moveSourceAsset = useCallback((id: string, delta: number) => {
+    setSourceAssets((prev) => {
+      const idx = prev.findIndex((r) => r.id === id);
+      if (idx < 0) return prev;
+      const target = idx + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(idx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  }, []);
+
+  const persistDraftEdit = useCallback(async (
+    draftEditId: string,
+    primaryKey: string,
+    title: string,
+  ) => {
+    try {
+      const supabase = getClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('edits').upsert({
+          id: draftEditId,
+          user_id: user.id,
+          title: title.replace(/\.[^.]+$/, ''),
+          status: 'draft',
+          source_video_url: primaryKey,
+          reference_urls: readyRefs.map((r) => r.url),
+        });
+      }
+    } catch {
+      // Non-fatal — render route will still create what it needs.
+    }
+  }, [readyRefs]);
+
+  const runSourceAssetUpload = useCallback(async (
+    id: string,
+    file: File,
+    kind: RefKind,
+    targetEditId: string,
+    resumeFrom?: UploadResumeState,
+  ) => {
+    updateSourceAsset(id, {
+      status: 'uploading',
+      error: undefined,
+      progress: resumeFrom
+        ? Math.round((resumeFrom.completedParts.length / resumeFrom.totalParts) * 100)
+        : 0,
+    });
+    try {
+      const { key } = await uploadToR2(file, {
+        kind: uploadKindFor('source', kind),
+        editId: targetEditId,
+        resumeFrom,
+        onProgress: (p: UploadProgress) => {
+          updateSourceAsset(id, {
+            progress: p.pct,
+            loadedBytes: p.loadedBytes,
+            totalBytes: p.totalBytes,
+            partsCompleted: p.partsCompleted,
+            totalParts: p.totalParts,
+            uploadMode: p.mode,
+            retryingAttempt: p.retryingAttempt,
+            currentConcurrency: p.currentConcurrency,
+          });
+          if (kind === 'video') setFootageProgress(p);
+        },
+        onResumeStateChange: (state) => updateSourceAsset(id, { resumeState: state }),
+      });
+
+      updateSourceAsset(id, {
+        status: 'ready',
+        url: key,
+        progress: 100,
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        retryingAttempt: undefined,
+      });
+
+      if (kind === 'video') {
+        setFootageR2Key((current) => current ?? key);
+        setFootageFile((current) => current ?? file);
+        setFootageResumeState(null);
+        setFootageUploadState('done');
+        setFootageProgress({
+          pct: 100,
+          loadedBytes: file.size,
+          totalBytes: file.size,
+          mode: 'single',
+        });
+        await persistDraftEdit(targetEditId, key, file.name);
+      }
+    } catch (err) {
+      updateSourceAsset(id, {
+        status: 'error',
+        error: friendlyUploadError(err),
+        retryingAttempt: undefined,
+      });
+      if (kind === 'video') {
+        setFootageError(friendlyUploadError(err));
+        setFootageUploadState('error');
+      }
+    }
+  }, [persistDraftEdit, updateSourceAsset]);
+
+  const uploadSourceFiles = useCallback(async (rawFiles: File[]) => {
+    const targetEditId = editId ?? makeUuid();
+    setEditId(targetEditId);
+
+    for (const rawFile of rawFiles) {
+      const validationError = validateMediaFile(rawFile, 'source');
+      if (validationError) {
+        setFootageError(validationError);
+        continue;
+      }
+      setFootageError(null);
+      const kind = inferKindFromMime(rawFile.type);
+      const file = kind === 'image' ? await maybeCompressImage(rawFile) : rawFile;
+      const id = makeId();
+      const previewUrl = kind === 'audio' ? undefined : URL.createObjectURL(file);
+      setSourceAssets((prev) => [
+        ...prev,
+        {
+          id,
+          kind,
+          source: 'upload',
+          url: '',
+          previewUrl,
+          label: file.name,
+          status: 'uploading',
+          progress: 0,
+          file,
+          totalBytes: file.size,
+          loadedBytes: 0,
+        },
+      ]);
+      if (kind === 'video') {
+        setFootageFile(file);
+        setFootageUploadState('uploading');
+      }
+      await runSourceAssetUpload(id, file, kind, targetEditId);
+    }
+  }, [editId, runSourceAssetUpload]);
+
+  const retrySourceAssetUpload = useCallback((id: string) => {
+    setSourceAssets((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (!target || !target.file) return prev;
+      const targetEditId = editId ?? makeUuid();
+      setEditId(targetEditId);
+      void runSourceAssetUpload(id, target.file, target.kind, targetEditId, target.resumeState);
+      return prev;
+    });
+  }, [editId, runSourceAssetUpload]);
+
+  // ─── Legacy single-footage upload path ──────────────────────────────────
   const runFootageUpload = useCallback(async (file: File, resumeFrom?: UploadResumeState) => {
     setFootageError(null);
     setFootageUploadState('uploading');
@@ -564,7 +806,7 @@ function EditorPageInner() {
     });
     try {
       const { key, editId: newEditId } = await uploadToR2(file, {
-        kind: 'source',
+        kind: 'source-video',
         resumeFrom,
         onProgress: (p) => setFootageProgress(p),
         onResumeStateChange: (state) => setFootageResumeState(state),
@@ -572,6 +814,22 @@ function EditorPageInner() {
 
       setFootageR2Key(key);
       setEditId(newEditId);
+      setSourceAssets((prev) => [
+        ...prev,
+        {
+          id: makeId(),
+          kind: 'video',
+          source: 'upload',
+          url: key,
+          previewUrl: URL.createObjectURL(file),
+          label: file.name,
+          status: 'ready',
+          progress: 100,
+          file,
+          totalBytes: file.size,
+          loadedBytes: file.size,
+        },
+      ]);
       setFootageResumeState(null);
       setFootageUploadState('done');
       setFootageProgress({
@@ -605,12 +863,9 @@ function EditorPageInner() {
   }, [readyRefs]);
 
   const uploadFootage = useCallback(async (file: File) => {
-    if (!ALLOWED_MIME.has(file.type)) {
-      setFootageError('Format not supported — use MP4, MOV, or WebM');
-      return;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setFootageError('File too large (max 500MB)');
+    const validationError = validateMediaFile(file, 'source');
+    if (validationError || inferKindFromMime(file.type) !== 'video') {
+      setFootageError(validationError || 'At least one video clip is required as the primary edit source.');
       return;
     }
     setFootageFile(file);
@@ -634,6 +889,20 @@ function EditorPageInner() {
       setFootageError(null);
       setFootageR2Key(src.key);
       setEditId(src.editId);
+      setSourceAssets((prev) => [
+        ...prev,
+        {
+          id: makeId(),
+          kind: inferKindFromMime(src.mimeType),
+          source: 'upload',
+          url: src.key,
+          label: src.name,
+          status: 'ready',
+          progress: 100,
+          totalBytes: src.size,
+          loadedBytes: src.size,
+        },
+      ]);
       setFootageProgress({
         pct: 100,
         loadedBytes: src.size,
@@ -676,9 +945,10 @@ function EditorPageInner() {
    */
   const pickVaultFootage = useCallback(
     async (picked: VaultFile[]) => {
-      const file = picked.find((f) => f.kind === 'video');
-      if (!file) {
-        setFootageError('Pick a video file for footage.');
+      const usable = picked.filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio');
+      const file = usable.find((f) => f.kind === 'video');
+      if (usable.length === 0 || !file) {
+        setFootageError('Pick at least one video clip. Images, music, and SFX can be added with it.');
         return;
       }
       const newEditId =
@@ -696,6 +966,20 @@ function EditorPageInner() {
       setFootageError(null);
       setFootageR2Key(file.r2_key);
       setEditId(newEditId);
+      setSourceAssets((prev) => [
+        ...prev,
+        ...usable.map<ReferenceItem>((f) => ({
+          id: makeId(),
+          kind: f.kind === 'audio' ? 'audio' : f.kind === 'image' ? 'image' : 'video',
+          source: 'upload',
+          url: f.r2_key,
+          label: f.filename,
+          status: 'ready',
+          progress: 100,
+          totalBytes: f.size_bytes,
+          loadedBytes: f.size_bytes,
+        })),
+      ]);
       setFootageUploadState('done');
       setFootageProgress({
         pct: 100,
@@ -744,10 +1028,47 @@ function EditorPageInner() {
           return;
         }
 
-        setEditId(edit.id);
+        let activeEditId = edit.id as string;
+        const refUrls: string[] = Array.isArray(edit.reference_urls) ? edit.reference_urls : [];
+        const restoredPrompt = extractEditDirection(edit.render_config);
+        if (restoredPrompt) setEditPrompt(restoredPrompt);
+
+        if (isVariantRequest) {
+          const { data: auth } = await supabase.auth.getUser();
+          const userId = auth.user?.id;
+          if (!userId) {
+            setResumeError('Sign in again to create a variation.');
+            setResumeState('error');
+            return;
+          }
+          const { data: variant, error: variantError } = await supabase
+            .from('edits')
+            .insert({
+              user_id: userId,
+              title: `${(edit.title as string) || 'Untitled Edit'} Variation`,
+              status: 'draft',
+              source_video_url: edit.source_video_url,
+              reference_urls: refUrls,
+              style_dna_id: edit.style_dna_id,
+            })
+            .select('id')
+            .single();
+          if (variantError || !variant) {
+            setResumeError(variantError?.message || 'Could not create variation.');
+            setResumeState('error');
+            return;
+          }
+          activeEditId = variant.id as string;
+          setVariantSourceId(edit.id as string);
+          setVariantNotice('Variation draft created. Change the direction, add media, then render a new version.');
+          setRenderState('idle');
+          setOutputUrl(null);
+          setExportVaultFileId(null);
+        }
+
+        setEditId(activeEditId);
 
         // Restore references (text array of R2 keys or external URLs)
-        const refUrls: string[] = Array.isArray(edit.reference_urls) ? edit.reference_urls : [];
         if (refUrls.length > 0) {
           setReferences(
             refUrls.map((u) => {
@@ -768,6 +1089,18 @@ function EditorPageInner() {
         // Restore footage
         if (edit.source_video_url) {
           setFootageR2Key(edit.source_video_url);
+          setSourceAssets((prev) => [
+            ...prev,
+            {
+              id: makeId(),
+              kind: 'video',
+              source: 'upload',
+              url: edit.source_video_url,
+              label: edit.title || edit.source_video_url.split('/').pop() || 'source video',
+              status: 'ready',
+              progress: 100,
+            },
+          ]);
           setFootageUploadState('done');
           setFootageProgress({
             pct: 100,
@@ -793,7 +1126,10 @@ function EditorPageInner() {
         }
 
         // Pick a starting step based on what's available
-        if (edit.status === 'completed' && edit.output_video_url) {
+        if (isVariantRequest && edit.style_dna_id && edit.source_video_url) {
+          const startOnMedia = typeof window !== 'undefined' && window.location.hash === '#media';
+          setStep(startOnMedia ? 'reference' : 'configure');
+        } else if (edit.status === 'completed' && edit.output_video_url) {
           setOutputUrl(edit.output_video_url);
           setRenderState('completed');
           setRenderProgress(100);
@@ -819,7 +1155,7 @@ function EditorPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [resumeId, resumeState]);
+  }, [resumeId, resumeState, isVariantRequest]);
 
   // ─── Step 3: Style DNA analysis (real) ─────────────────────────────────
   useEffect(() => {
@@ -1003,8 +1339,14 @@ function EditorPageInner() {
             outputFps: 30,
             hookText: hookText.trim() || undefined,
             ctaText: ctaText.trim() || undefined,
+            editPrompt: editPrompt.trim() || undefined,
             generateSoundtrack,
             referenceSoundtrackKey: generateSoundtrack && soundtrackR2Key ? soundtrackR2Key : undefined,
+            sourceMedia: readySourceAssets.map((asset) => ({
+              type: asset.kind,
+              url: asset.url,
+              label: asset.label,
+            })),
             captions: captionsPayload
               ? { transcription: captionsPayload, style: captionStyle }
               : undefined,
@@ -1021,7 +1363,7 @@ function EditorPageInner() {
       setMatchState('error');
       return { ok: false, error: msg };
     }
-  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, generateSoundtrack, soundtrackR2Key, captionStyle]);
+  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, editPrompt, generateSoundtrack, soundtrackR2Key, readySourceAssets, captionStyle]);
 
   const transcribeForCaptions = useCallback(async (): Promise<unknown | null> => {
     if (!autoCaptions || !footageR2Key) return null;
@@ -1058,7 +1400,7 @@ function EditorPageInner() {
 
   const startRender = useCallback(async () => {
     if (!editId || !footageR2Key) {
-      setRenderError('Upload footage before rendering.');
+      setRenderError('Upload at least one video clip before rendering.');
       return;
     }
     if (!styleDNA) {
@@ -1102,7 +1444,7 @@ function EditorPageInner() {
   const canAdvance = (() => {
     switch (step) {
       case 'reference': return hasReadyRef;
-      case 'footage':   return footageUploadState === 'done';
+      case 'footage':   return hasReadySourceVideo;
       case 'style':     return analyzeState === 'done';
       case 'configure': return true;
       case 'render':    return false;
@@ -1205,7 +1547,7 @@ function EditorPageInner() {
           <div className="w-full max-w-2xl">
             <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Add Your References</h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Drop in 3&ndash;4 reference videos and a couple mood-board images. A7 blends them into one Style DNA.
+              Drop in reference edits, images, music, SFX, and social links. A7 blends them into one Style DNA.
             </p>
 
             <button
@@ -1235,6 +1577,8 @@ function EditorPageInner() {
 
             <ReferenceDropZone
               onFiles={(files) => files.forEach(uploadReferenceFile)}
+              title="Drop reference edits, images, music, or SFX"
+              subtitle="MP4/MOV/WebM · JPG/PNG/WebP/HEIC/AVIF · MP3/WAV/AAC/OGG"
             />
 
             <div className="my-6 flex items-center gap-3">
@@ -1254,7 +1598,7 @@ function EditorPageInner() {
                     addReferenceUrl();
                   }
                 }}
-                placeholder="https://www.instagram.com/reel/... or image URL"
+                placeholder="https://www.instagram.com/reel/... or media URL"
                 className="flex-1 px-4 py-3 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal"
               />
               <button
@@ -1306,10 +1650,10 @@ function EditorPageInner() {
         {step === 'footage' && (
           <div className="w-full max-w-xl">
             <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">
-              Add Your Footage
+              Add Source Media
             </h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Pick the raw clip you want edited — from your vault, your device, or the cloud.
+              Add the raw clips, photos, music, SFX, and supporting assets A7 should pull into the final edit.
             </p>
 
             <button
@@ -1327,7 +1671,7 @@ function EditorPageInner() {
               <div className="flex-1">
                 <div className="font-semibold text-sm text-a7-text">Import from your vault</div>
                 <div className="text-xs text-a7-text/50">
-                  Use raw footage you already staged in /footage.
+                  Use raw clips and supporting media you already staged in your vault.
                 </div>
               </div>
               <span className="text-grad-teal text-sm">→</span>
@@ -1337,20 +1681,37 @@ function EditorPageInner() {
               or upload directly
             </div>
 
-            <DropZone
-              accept="video/*"
-              file={footageFile}
-              uploadState={footageUploadState}
-              onFile={uploadFootage}
-              progress={footageProgress}
-              error={footageError}
-              canResume={!!footageResumeState}
-              onRetry={retryFootageUpload}
+            <ReferenceDropZone
+              onFiles={uploadSourceFiles}
+              title="Drop source clips, images, music, or SFX"
+              subtitle="At least one video clip is required · supporting images/audio are pulled into the render"
             />
 
+            {sourceAssets.length > 0 && (
+              <div className="mt-6">
+                <div className="text-[11px] text-a7-text/40 uppercase tracking-wider mb-3">
+                  {sourceAssets.length} source asset{sourceAssets.length === 1 ? '' : 's'}
+                  {!hasReadySourceVideo && ' · add a video to continue'}
+                </div>
+                <div className="space-y-2">
+                  {sourceAssets.map((asset, idx) => (
+                    <ReferenceRow
+                      key={asset.id}
+                      item={asset}
+                      isFirst={idx === 0}
+                      isLast={idx === sourceAssets.length - 1}
+                      onMoveUp={() => moveSourceAsset(asset.id, -1)}
+                      onMoveDown={() => moveSourceAsset(asset.id, 1)}
+                      onRemove={() => removeSourceAsset(asset.id)}
+                      onRetry={() => retrySourceAssetUpload(asset.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <p className="mt-3 text-[11px] text-a7-text/30 text-center">
-              Want to pull from Google Drive or Dropbox? Open the vault and import,
-              then return here to pick it up.
+              Cloud import currently pulls one direct media item at a time; add more from your vault or device above.
             </p>
 
             {footageError && (
@@ -1445,6 +1806,34 @@ function EditorPageInner() {
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
               Tune output and storytelling. Style DNA already shapes the cut.
             </p>
+
+            {variantNotice && (
+              <div
+                className="mb-5 rounded-md px-4 py-3 text-sm text-left"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(45,212,191,0.08), rgba(184,115,51,0.03))',
+                  border: '1px solid rgba(45,212,191,0.22)',
+                  color: 'rgba(245,240,232,0.72)',
+                }}
+              >
+                {variantNotice}
+              </div>
+            )}
+
+            <FieldGroup label={variantSourceId ? 'Variation direction' : 'Edit direction'}>
+              <textarea
+                value={editPrompt}
+                onChange={(e) => setEditPrompt(e.target.value)}
+                placeholder="Example: make this punchier, open with the most intense moment, use music hits for cuts, keep captions minimal."
+                maxLength={500}
+                rows={4}
+                className="w-full px-4 py-3 rounded-md text-sm bg-a7-base border border-a7-text/[0.08] text-a7-text placeholder:text-a7-text/20 focus:outline-none focus:border-grad-teal resize-none"
+              />
+              <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-a7-text/30">
+                <span>Applies to this render plan and each regenerated variation.</span>
+                <span>{editPrompt.length}/500</span>
+              </div>
+            </FieldGroup>
 
             <FieldGroup label="Platform">
               <Segmented
@@ -1710,6 +2099,30 @@ function EditorPageInner() {
                   outputUrl={outputUrl}
                   vaultFileId={exportVaultFileId}
                 />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <a
+                    href={editId ? `/editor?id=${encodeURIComponent(editId)}&variant=1` : '/editor'}
+                    className="py-3 rounded-md font-medium text-sm transition-all text-center"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+                      border: '1px solid rgba(45,212,191,0.25)',
+                      color: '#5BE8D5',
+                    }}
+                  >
+                    Make Variation
+                  </a>
+                  <a
+                    href={editId ? `/editor?id=${encodeURIComponent(editId)}&variant=1#media` : '/editor'}
+                    className="py-3 rounded-md font-medium text-sm transition-all text-center"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(184,115,51,0.1), rgba(184,115,51,0.03))',
+                      border: '1px solid rgba(184,115,51,0.25)',
+                      color: '#E8B06A',
+                    }}
+                  >
+                    Add Media / Refs
+                  </a>
+                </div>
                 <div className="flex gap-3 mt-3">
                   <a
                     href="/vault"
@@ -1793,7 +2206,7 @@ function EditorPageInner() {
       <VaultPicker
         open={referencePickerOpen}
         defaultFolder="references"
-        allowedKinds={['video', 'image']}
+        allowedKinds={['video', 'image', 'audio']}
         multiple
         onClose={() => setReferencePickerOpen(false)}
         onSelect={(picked) => addReferencesFromVault(picked)}
@@ -1801,8 +2214,8 @@ function EditorPageInner() {
       <VaultPicker
         open={footagePickerOpen}
         defaultFolder="footage"
-        allowedKinds={['video']}
-        multiple={false}
+        allowedKinds={['video', 'image', 'audio']}
+        multiple
         onClose={() => setFootagePickerOpen(false)}
         onSelect={(picked) => void pickVaultFootage(picked)}
       />
@@ -2146,7 +2559,15 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
+function ReferenceDropZone({
+  onFiles,
+  title,
+  subtitle,
+}: {
+  onFiles: (files: File[]) => void;
+  title: string;
+  subtitle: string;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -2176,7 +2597,7 @@ function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
       <input
         ref={inputRef}
         type="file"
-        accept="video/*,image/*"
+        accept="video/*,image/*,audio/*"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -2196,8 +2617,8 @@ function ReferenceDropZone({ onFiles }: { onFiles: (files: File[]) => void }) {
         <polyline points="8,13 16,5 24,13" fill="none" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
         <line x1="6" y1="28" x2="26" y2="28" stroke="url(#multi-drop-grad)" strokeWidth="2.5" strokeLinecap="round" />
       </svg>
-      <p className="text-a7-text/50 text-sm mb-1">Drop videos and images — or click to choose</p>
-      <p className="text-a7-text/20 text-xs">MP4/MOV/WebM up to 500MB · JPG/PNG/WebP/HEIC/AVIF</p>
+      <p className="text-a7-text/50 text-sm mb-1">{title}</p>
+      <p className="text-a7-text/20 text-xs">{subtitle}</p>
     </label>
   );
 }
@@ -2252,7 +2673,12 @@ function ReferenceRow({
             className="w-full h-full object-cover"
           />
         )}
-        {!item.previewUrl && (
+        {item.kind === 'audio' && (
+          <span className="text-[10px] uppercase tracking-wider text-a7-text/40">
+            AUD
+          </span>
+        )}
+        {!item.previewUrl && item.kind !== 'audio' && (
           <span className="text-[10px] uppercase tracking-wider text-a7-text/40">
             {item.kind === 'image' ? 'IMG' : 'VID'}
           </span>
@@ -2264,9 +2690,13 @@ function ReferenceRow({
           <span
             className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider"
             style={{
-              background: item.kind === 'image' ? 'rgba(184,115,51,0.12)' : 'rgba(45,212,191,0.12)',
-              color: item.kind === 'image' ? '#D4944A' : '#5BE8D5',
-              border: `1px solid ${item.kind === 'image' ? 'rgba(184,115,51,0.25)' : 'rgba(45,212,191,0.25)'}`,
+              background: item.kind === 'image'
+                ? 'rgba(184,115,51,0.12)'
+                : item.kind === 'audio'
+                ? 'rgba(232,176,106,0.1)'
+                : 'rgba(45,212,191,0.12)',
+              color: item.kind === 'image' ? '#D4944A' : item.kind === 'audio' ? '#E8B06A' : '#5BE8D5',
+              border: `1px solid ${item.kind === 'image' ? 'rgba(184,115,51,0.25)' : item.kind === 'audio' ? 'rgba(232,176,106,0.22)' : 'rgba(45,212,191,0.25)'}`,
             }}
           >
             {item.kind}
