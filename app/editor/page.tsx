@@ -139,10 +139,51 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const STYLE_DNA_CLIENT_FALLBACK_MS = 20_000;
+const MAX_PROJECT_REFERENCES = 100;
+const MAX_PROJECT_SOURCE_ASSETS = 100;
 const MAX_DEEP_STYLE_REFERENCES = 12;
+const RENDER_PRIMARY_VIDEO_LIMIT = 1;
+const RENDER_SUPPORTING_VISUAL_LIMIT = 4;
+const RENDER_AUDIO_LAYER_LIMIT = 1;
+const RENDER_STATUS_TIMEOUT_MS = 15_000;
+const RENDER_MATCH_TIMEOUT_MS = 60_000;
+const RENDER_SUBMIT_TIMEOUT_MS = 45_000;
+const CAPTION_TRANSCRIBE_TIMEOUT_MS = 60_000;
 
 function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind['kind'] {
   return `${scope}-${kind}` as UploadKind['kind'];
+}
+
+function countByKind(items: ReferenceItem[]) {
+  return items.reduce(
+    (counts, item) => {
+      counts[item.kind] += 1;
+      return counts;
+    },
+    { video: 0, image: 0, audio: 0 } as Record<RefKind, number>
+  );
+}
+
+async function fetchJsonWithTimeout<T>(
+  input: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  label: string
+): Promise<{ res: Response; data: T }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(input, { ...init, signal: controller.signal });
+    const data = await res.json().catch(() => ({})) as T;
+    return { res, data };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`${label} timed out. Your edit is saved; refresh or try again from this screen.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function makeUuid() {
@@ -348,6 +389,7 @@ function EditorPageInner() {
     () => readyRefs.map((r) => `${r.kind}:${r.source}:${r.url}`).join('|'),
     [readyRefs]
   );
+  const referenceCounts = useMemo(() => countByKind(references), [references]);
   const hasReadyRef = readyRefs.length > 0;
   // First soundtrack candidate: uploaded music/SFX wins, with video as fallback.
   const soundtrackR2Key =
@@ -369,6 +411,7 @@ function EditorPageInner() {
     () => sourceAssets.filter((r) => r.status === 'ready'),
     [sourceAssets]
   );
+  const sourceCounts = useMemo(() => countByKind(sourceAssets), [sourceAssets]);
   const primarySourceAsset = readySourceAssets.find((r) => r.kind === 'video') ?? null;
   const primarySourceKey = footageR2Key ?? primarySourceAsset?.url ?? null;
   const hasReadySourceVideo = Boolean(primarySourceKey);
@@ -406,6 +449,8 @@ function EditorPageInner() {
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [renderNotice, setRenderNotice] = useState<string | null>(null);
+  const [renderStartedAtMs, setRenderStartedAtMs] = useState<number | null>(null);
+  const [renderElapsedSec, setRenderElapsedSec] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [exportVaultFileId, setExportVaultFileId] = useState<string | null>(null);
   const renderPollFailures = useRef(0);
@@ -536,6 +581,10 @@ function EditorPageInner() {
   }, [updateReference]);
 
   const uploadReferenceFile = useCallback(async (rawFile: File) => {
+    if (references.length >= MAX_PROJECT_REFERENCES) {
+      setReferenceError(`This edit can hold ${MAX_PROJECT_REFERENCES} references. Remove one to add another.`);
+      return;
+    }
     const validationError = validateMediaFile(rawFile, 'reference');
     if (validationError) {
       setReferenceError(validationError);
@@ -569,7 +618,22 @@ function EditorPageInner() {
     ]);
 
     await runReferenceUpload(id, file, kind);
-  }, [runReferenceUpload]);
+  }, [references.length, runReferenceUpload]);
+
+  const uploadReferenceFiles = useCallback((files: File[]) => {
+    const remaining = MAX_PROJECT_REFERENCES - references.length;
+    if (remaining <= 0) {
+      setReferenceError(`This edit can hold ${MAX_PROJECT_REFERENCES} references. Remove one to add another.`);
+      return;
+    }
+    const selected = files.slice(0, remaining);
+    if (selected.length < files.length) {
+      setReferenceError(`Added ${selected.length}; this edit can hold ${MAX_PROJECT_REFERENCES} references total.`);
+    } else {
+      setReferenceError(null);
+    }
+    selected.forEach((file) => void uploadReferenceFile(file));
+  }, [references.length, uploadReferenceFile]);
 
   /** Resume a multipart upload that hard-failed. Called from the "Tap to
    *  retry" button on the upload row. Reuses the same R2 multipart UploadId
@@ -587,6 +651,10 @@ function EditorPageInner() {
   const addReferenceUrl = useCallback(() => {
     const trimmed = pendingUrl.trim();
     if (!trimmed) return;
+    if (references.length >= MAX_PROJECT_REFERENCES) {
+      setReferenceError(`This edit can hold ${MAX_PROJECT_REFERENCES} references. Remove one to add another.`);
+      return;
+    }
     try {
       new URL(trimmed);
     } catch {
@@ -606,24 +674,34 @@ function EditorPageInner() {
       },
     ]);
     setPendingUrl('');
-  }, [pendingUrl]);
+  }, [pendingUrl, references.length]);
 
   const addReferencesFromVault = useCallback((picked: VaultFile[]) => {
-    setReferenceError(null);
+    const remaining = MAX_PROJECT_REFERENCES - references.length;
+    if (remaining <= 0) {
+      setReferenceError(`This edit can hold ${MAX_PROJECT_REFERENCES} references. Remove one to add another.`);
+      return;
+    }
+    const usable = picked
+      .filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio')
+      .slice(0, remaining);
+    if (usable.length < picked.length) {
+      setReferenceError(`Added ${usable.length}; this edit can hold ${MAX_PROJECT_REFERENCES} references total.`);
+    } else {
+      setReferenceError(null);
+    }
     setReferences((prev) => [
       ...prev,
-      ...picked
-        .filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio')
-        .map<ReferenceItem>((f) => ({
-          id: makeId(),
-          kind: f.kind === 'audio' ? 'audio' : f.kind === 'image' ? 'image' : 'video',
-          source: 'upload',
-          url: f.r2_key,
-          label: f.filename,
-          status: 'ready',
-        })),
+      ...usable.map<ReferenceItem>((f) => ({
+        id: makeId(),
+        kind: f.kind === 'audio' ? 'audio' : f.kind === 'image' ? 'image' : 'video',
+        source: 'upload',
+        url: f.r2_key,
+        label: f.filename,
+        status: 'ready',
+      })),
     ]);
-  }, []);
+  }, [references.length]);
 
   // ─── Step 2: Source media uploads ───────────────────────────────────────
   const updateSourceAsset = useCallback((id: string, patch: Partial<ReferenceItem>) => {
@@ -759,10 +837,19 @@ function EditorPageInner() {
   }, [persistDraftEdit, updateSourceAsset]);
 
   const uploadSourceFiles = useCallback(async (rawFiles: File[]) => {
+    const remaining = MAX_PROJECT_SOURCE_ASSETS - sourceAssets.length;
+    if (remaining <= 0) {
+      setFootageError(`This edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items. Remove one to add another.`);
+      return;
+    }
+    const filesToProcess = rawFiles.slice(0, remaining);
+    if (filesToProcess.length < rawFiles.length) {
+      setFootageError(`Added ${filesToProcess.length}; this edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items total.`);
+    }
     const targetEditId = editId ?? makeUuid();
     setEditId(targetEditId);
 
-    for (const rawFile of rawFiles) {
+    for (const rawFile of filesToProcess) {
       const validationError = validateMediaFile(rawFile, 'source');
       if (validationError) {
         setFootageError(validationError);
@@ -795,7 +882,7 @@ function EditorPageInner() {
       }
       await runSourceAssetUpload(id, file, kind, targetEditId);
     }
-  }, [editId, runSourceAssetUpload]);
+  }, [editId, runSourceAssetUpload, sourceAssets.length]);
 
   const retrySourceAssetUpload = useCallback((id: string) => {
     setSourceAssets((prev) => {
@@ -879,6 +966,10 @@ function EditorPageInner() {
   }, [readyRefs]);
 
   const uploadFootage = useCallback(async (file: File) => {
+    if (sourceAssets.length >= MAX_PROJECT_SOURCE_ASSETS) {
+      setFootageError(`This edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items. Remove one to add another.`);
+      return;
+    }
     const validationError = validateMediaFile(file, 'source');
     if (validationError || inferKindFromMime(file.type) !== 'video') {
       setFootageError(validationError || 'At least one video clip is required as the primary edit source.');
@@ -887,7 +978,7 @@ function EditorPageInner() {
     setFootageFile(file);
     setFootageResumeState(null);
     await runFootageUpload(file);
-  }, [runFootageUpload]);
+  }, [runFootageUpload, sourceAssets.length]);
 
   /** Resume a multipart footage upload that hard-failed. */
   const retryFootageUpload = useCallback(() => {
@@ -902,14 +993,20 @@ function EditorPageInner() {
    */
   const acceptCloudImport = useCallback(
     async (src: ImportedSource) => {
+      if (sourceAssets.length >= MAX_PROJECT_SOURCE_ASSETS) {
+        setFootageError(`This edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items. Remove one to add another.`);
+        return;
+      }
+      const importedKind = inferKindFromMime(src.mimeType);
+      const targetEditId = editId ?? src.editId;
       setFootageError(null);
-      setFootageR2Key(src.key);
-      setEditId(src.editId);
+      if (importedKind === 'video') setFootageR2Key(src.key);
+      setEditId(targetEditId);
       setSourceAssets((prev) => [
         ...prev,
         {
           id: makeId(),
-          kind: inferKindFromMime(src.mimeType),
+          kind: importedKind,
           source: 'upload',
           url: src.key,
           label: src.name,
@@ -925,21 +1022,21 @@ function EditorPageInner() {
         totalBytes: src.size,
         mode: 'single',
       });
-      setFootageUploadState('done');
+      if (importedKind === 'video') setFootageUploadState('done');
       try {
         const synthetic = new File([new Uint8Array(0)], src.name, {
           type: src.mimeType,
         });
-        setFootageFile(synthetic);
+        if (importedKind === 'video') setFootageFile(synthetic);
       } catch {
-        setFootageFile(null);
+        if (importedKind === 'video') setFootageFile(null);
       }
       try {
         const supabase = getClient();
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
+        if (user && importedKind === 'video') {
           await supabase.from('edits').upsert({
-            id: src.editId,
+            id: targetEditId,
             user_id: user.id,
             title: src.name.replace(/\.[^.]+$/, ''),
             status: 'draft',
@@ -951,7 +1048,7 @@ function EditorPageInner() {
         // Non-fatal — render route falls back to its own row creation.
       }
     },
-    [readyRefs]
+    [editId, readyRefs, sourceAssets.length]
   );
 
   /**
@@ -961,26 +1058,44 @@ function EditorPageInner() {
    */
   const pickVaultFootage = useCallback(
     async (picked: VaultFile[]) => {
-      const usable = picked.filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio');
-      const file = usable.find((f) => f.kind === 'video');
-      if (usable.length === 0 || !file) {
+      const remaining = MAX_PROJECT_SOURCE_ASSETS - sourceAssets.length;
+      if (remaining <= 0) {
+        setFootageError(`This edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items. Remove one to add another.`);
+        return;
+      }
+      const usable = picked
+        .filter((f) => f.kind === 'video' || f.kind === 'image' || f.kind === 'audio')
+        .slice(0, remaining);
+      const selectedVideo = usable.find((f) => f.kind === 'video');
+      const currentPrimaryKey = primarySourceKey;
+      const primaryFile = selectedVideo ?? (currentPrimaryKey
+        ? usable.find((f) => f.r2_key === currentPrimaryKey)
+        : undefined);
+      if (usable.length === 0 || (!selectedVideo && !currentPrimaryKey)) {
         setFootageError('Pick at least one video clip. Images, music, and SFX can be added with it.');
         return;
       }
-      const newEditId =
+      if (usable.length < picked.length) {
+        setFootageError(`Added ${usable.length}; this edit can hold ${MAX_PROJECT_SOURCE_ASSETS} source media items total.`);
+      } else {
+        setFootageError(null);
+      }
+      const newEditId = editId ?? (
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? crypto.randomUUID()
-          : Math.random().toString(36).slice(2);
+          : Math.random().toString(36).slice(2)
+      );
       try {
-        const synthetic = new File([new Uint8Array(0)], file.filename, {
-          type: file.content_type,
-        });
-        setFootageFile(synthetic);
+        if (selectedVideo) {
+          const synthetic = new File([new Uint8Array(0)], selectedVideo.filename, {
+            type: selectedVideo.content_type,
+          });
+          setFootageFile(synthetic);
+        }
       } catch {
-        setFootageFile(null);
+        if (selectedVideo) setFootageFile(null);
       }
-      setFootageError(null);
-      setFootageR2Key(file.r2_key);
+      if (selectedVideo) setFootageR2Key(selectedVideo.r2_key);
       setEditId(newEditId);
       setSourceAssets((prev) => [
         ...prev,
@@ -999,21 +1114,21 @@ function EditorPageInner() {
       setFootageUploadState('done');
       setFootageProgress({
         pct: 100,
-        loadedBytes: file.size_bytes,
-        totalBytes: file.size_bytes,
+        loadedBytes: (selectedVideo ?? primaryFile)?.size_bytes ?? 0,
+        totalBytes: (selectedVideo ?? primaryFile)?.size_bytes ?? 0,
         mode: 'single',
       });
 
       try {
         const supabase = getClient();
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
+        if (user && selectedVideo) {
           await supabase.from('edits').upsert({
             id: newEditId,
             user_id: user.id,
-            title: file.filename.replace(/\.[^.]+$/, ''),
+            title: selectedVideo.filename.replace(/\.[^.]+$/, ''),
             status: 'draft',
-            source_video_url: file.r2_key,
+            source_video_url: selectedVideo.r2_key,
             reference_urls: readyRefs.map((r) => r.url),
           });
         }
@@ -1021,7 +1136,7 @@ function EditorPageInner() {
         // Non-fatal
       }
     },
-    [readyRefs]
+    [editId, primarySourceKey, readyRefs, sourceAssets.length]
   );
   // ─── Resume from ?id= ──────────────────────────────────────────────────
   // When the editor is opened from a recent-edit card, hydrate state from the
@@ -1143,7 +1258,7 @@ function EditorPageInner() {
 
         const { data: latestJob } = await supabase
           .from('render_jobs')
-          .select('id, status, progress, error_message')
+          .select('id, status, progress, error_message, started_at')
           .eq('edit_id', activeEditId)
           .order('created_at', { ascending: false })
           .limit(1)
@@ -1154,12 +1269,16 @@ function EditorPageInner() {
           setRenderJobId(latestJob.id as string);
           setRenderState('processing');
           setRenderProgress(Number(latestJob.progress ?? 0));
+          setRenderStartedAtMs(
+            latestJob.started_at ? new Date(latestJob.started_at as string).getTime() : Date.now()
+          );
           setRenderNotice('Reconnected to your active render. You can leave this tab and come back safely.');
           setStep('render');
         } else if (!isVariantRequest && latestJob?.status === 'failed') {
           setRenderJobId(latestJob.id as string);
           setRenderState('failed');
           setRenderProgress(Number(latestJob.progress ?? 0));
+          setRenderStartedAtMs(null);
           setRenderError(
             (latestJob.error_message as string | null) ||
               'Render failed. Your project is saved and you can try again.'
@@ -1318,6 +1437,16 @@ function EditorPageInner() {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
+  useEffect(() => {
+    if ((renderState !== 'submitting' && renderState !== 'processing') || !renderStartedAtMs) return;
+    const updateElapsed = () => {
+      setRenderElapsedSec(Math.max(0, Math.floor((Date.now() - renderStartedAtMs) / 1000)));
+    };
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 1000);
+    return () => clearInterval(timer);
+  }, [renderState, renderStartedAtMs]);
+
   // Release any object URLs held by reference rows when the page unmounts.
   useEffect(() => {
     return () => {
@@ -1336,14 +1465,22 @@ function EditorPageInner() {
 
   const pollStatus = useCallback(async (jobId: string) => {
     try {
-      const res = await fetch(`/api/shotstack/status?jobId=${encodeURIComponent(jobId)}`, {
-        cache: 'no-store',
-      });
+      const { res, data } = await fetchJsonWithTimeout<{
+        status?: string;
+        progress?: number;
+        error?: string;
+        playbackUrl?: string | null;
+        vaultFileId?: string | null;
+        warning?: string;
+      }>(
+        `/api/shotstack/status?jobId=${encodeURIComponent(jobId)}`,
+        { cache: 'no-store' },
+        RENDER_STATUS_TIMEOUT_MS,
+        'Render status check'
+      );
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Status check failed: ${res.status}`);
+        throw new Error(data.error || `Status check failed: ${res.status}`);
       }
-      const data = await res.json();
       if (data.warning) setRenderNotice(data.warning);
       else setRenderNotice(null);
       if (typeof data.progress === 'number') setRenderProgress(data.progress);
@@ -1352,6 +1489,7 @@ function EditorPageInner() {
         renderPollFailures.current = 0;
         activePollJobRef.current = null;
         setRenderState('completed');
+        setRenderStartedAtMs(null);
         setOutputUrl(data.playbackUrl || null);
         setExportVaultFileId(data.vaultFileId || null);
         setRenderNotice(null);
@@ -1362,6 +1500,7 @@ function EditorPageInner() {
         renderPollFailures.current = 0;
         activePollJobRef.current = null;
         setRenderState('failed');
+        setRenderStartedAtMs(null);
         setRenderError(data.error || 'Render failed. Your project is saved and you can try again.');
         setRenderNotice(null);
         stopPolling();
@@ -1377,6 +1516,7 @@ function EditorPageInner() {
       }
       activePollJobRef.current = null;
       setRenderState('failed');
+      setRenderStartedAtMs(null);
       setRenderError('A7 could not confirm render status after several retries. Your project is saved; try again from this screen.');
       stopPolling();
     }
@@ -1399,35 +1539,39 @@ function EditorPageInner() {
     setMatchState('matching');
     setMatchError(null);
     try {
-      const res = await fetch('/api/style-dna/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          editId,
-          styleDNA,
-          options: {
-            targetDuration,
-            platform,
-            outputFormat: format,
-            outputResolution: resolution,
-            outputFps: 30,
-            hookText: hookText.trim() || undefined,
-            ctaText: ctaText.trim() || undefined,
-            editPrompt: editPrompt.trim() || undefined,
-            generateSoundtrack,
-            referenceSoundtrackKey: generateSoundtrack && soundtrackR2Key ? soundtrackR2Key : undefined,
-            sourceMedia: readySourceAssets.map((asset) => ({
-              type: asset.kind,
-              url: asset.url,
-              label: asset.label,
-            })),
-            captions: captionsPayload
-              ? { transcription: captionsPayload, style: captionStyle }
-              : undefined,
-          },
-        }),
-      });
-      const body = await res.json();
+      const { res, data: body } = await fetchJsonWithTimeout<{ error?: string }>(
+        '/api/style-dna/match',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            editId,
+            styleDNA,
+            options: {
+              targetDuration,
+              platform,
+              outputFormat: format,
+              outputResolution: resolution,
+              outputFps: 30,
+              hookText: hookText.trim() || undefined,
+              ctaText: ctaText.trim() || undefined,
+              editPrompt: editPrompt.trim() || undefined,
+              generateSoundtrack,
+              referenceSoundtrackKey: generateSoundtrack && soundtrackR2Key ? soundtrackR2Key : undefined,
+              sourceMedia: readySourceAssets.map((asset) => ({
+                type: asset.kind,
+                url: asset.url,
+                label: asset.label,
+              })),
+              captions: captionsPayload
+                ? { transcription: captionsPayload, style: captionStyle }
+                : undefined,
+            },
+          }),
+        },
+        RENDER_MATCH_TIMEOUT_MS,
+        'Render plan build'
+      );
       if (!res.ok) throw new Error(body.error || `Match failed (${res.status})`);
       setMatchState('ready');
       return { ok: true };
@@ -1446,12 +1590,16 @@ function EditorPageInner() {
     setCaptionState('transcribing');
     setCaptionError(null);
     try {
-      const res = await fetch('/api/captions/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ r2Key: primarySourceKey }),
-      });
-      const data = await res.json();
+      const { res, data } = await fetchJsonWithTimeout<{ error?: string; transcription?: unknown }>(
+        '/api/captions/transcribe',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ r2Key: primarySourceKey }),
+        },
+        CAPTION_TRANSCRIBE_TIMEOUT_MS,
+        'Caption transcription'
+      );
       if (res.status === 503) {
         setCaptionState('unavailable');
         setCaptionError(data.error || 'Auto-captions are not configured.');
@@ -1494,6 +1642,8 @@ function EditorPageInner() {
     setRenderError(null);
     setRenderNotice(null);
     setRenderProgress(0);
+    setRenderStartedAtMs(Date.now());
+    setRenderElapsedSec(0);
 
     try {
       // Optional: run Whisper transcription so the match step can layer in captions.
@@ -1503,18 +1653,29 @@ function EditorPageInner() {
       const matched = await buildMatch(transcription ?? undefined);
       if (!matched.ok) {
         setRenderState('failed');
+        setRenderStartedAtMs(null);
         setRenderError(matched.error || 'Failed to compose render plan');
         return;
       }
 
-      const res = await fetch('/api/shotstack/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ editId }),
-      });
-      const data = await res.json();
+      const { res, data } = await fetchJsonWithTimeout<{
+        error?: string;
+        jobId?: string;
+        duplicate?: boolean;
+        fallback?: boolean;
+      }>(
+        '/api/shotstack/render',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ editId }),
+        },
+        RENDER_SUBMIT_TIMEOUT_MS,
+        'Render submission'
+      );
       if (!res.ok) throw new Error(data.error || `Render submit failed: ${res.status}`);
 
+      if (!data.jobId) throw new Error('Renderer did not return a job id. Your edit is saved; try again.');
       setRenderJobId(data.jobId);
       if (data.duplicate) {
         setRenderNotice('Render was already processing. A7 reconnected instead of starting a duplicate job.');
@@ -1524,6 +1685,7 @@ function EditorPageInner() {
       setRenderState('processing');
     } catch (err) {
       setRenderState('failed');
+      setRenderStartedAtMs(null);
       setRenderError(err instanceof Error ? err.message : 'Render failed. Your project is saved and you can try again.');
     }
   }, [editId, primarySourceKey, styleDNA, buildMatch, autoCaptions, transcribeForCaptions]);
@@ -1635,8 +1797,21 @@ function EditorPageInner() {
           <div className="w-full max-w-2xl">
             <h2 className="text-lg sm:text-xl font-bold mb-2 text-center text-a7-text break-words">Add Your References</h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Drop in unlimited reference edits, images, music, SFX, and social links. A7 keeps them in the project and deeply analyzes the first 12 ordered references for Style DNA.
+              Add the edits, images, music, SFX, and social links that define the taste of the cut.
             </p>
+
+            <MediaLimitGuide
+              title="Reference limits for one edit"
+              summary={`${references.length}/${MAX_PROJECT_REFERENCES} references added`}
+              counts={referenceCounts}
+              rows={[
+                { label: 'Total references', value: `Up to ${MAX_PROJECT_REFERENCES} per edit`, active: true },
+                { label: 'Deep Style DNA', value: `First ${MAX_DEEP_STYLE_REFERENCES} ordered references` },
+                { label: 'Allowed types', value: 'Video, image, music, SFX, social/media links' },
+                { label: 'Best practice', value: 'Put the strongest emotional references first' },
+              ]}
+              note={`A7 saves the full reference set, then deeply analyzes the first ${MAX_DEEP_STYLE_REFERENCES} for Style DNA so the pipeline stays reliable.`}
+            />
 
             <button
               type="button"
@@ -1664,9 +1839,9 @@ function EditorPageInner() {
             </div>
 
             <ReferenceDropZone
-              onFiles={(files) => files.forEach(uploadReferenceFile)}
+              onFiles={uploadReferenceFiles}
               title="Drop reference edits, images, music, or SFX"
-              subtitle="MP4/MOV/WebM · JPG/PNG/WebP/HEIC/AVIF · MP3/WAV/AAC/OGG"
+              subtitle={`${MAX_PROJECT_REFERENCES} total refs · videos/images up to ${formatBytes(MAX_UPLOAD_BYTES)} each · audio up to ${formatBytes(MAX_AUDIO_UPLOAD_BYTES)} each`}
             />
 
             <div className="my-6 flex items-center gap-3">
@@ -1715,7 +1890,7 @@ function EditorPageInner() {
                     ` · ${readyRefs.length} ready`}
                 </div>
                 <p className="text-xs text-a7-text/35 mb-3">
-                  Put the most important references first. Deep Style DNA uses the first 12; the full set remains saved for taste, direction, and variations.
+                  Reorder these any time. The first {MAX_DEEP_STYLE_REFERENCES} drive deep Style DNA; the rest stay saved for taste, direction, and variations.
                 </p>
                 <div className="space-y-2">
                   {references.map((ref, idx) => (
@@ -1744,8 +1919,21 @@ function EditorPageInner() {
               Add Source Media
             </h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Add as many clips, photos, music, SFX, and references as you want. A7 keeps everything in the project, then selects a safe render slate for the final cut.
+              Add the raw clips and supporting layers A7 should turn into the final edit.
             </p>
+
+            <MediaLimitGuide
+              title="Raw footage limits for one edit"
+              summary={`${sourceAssets.length}/${MAX_PROJECT_SOURCE_ASSETS} source media items added`}
+              counts={sourceCounts}
+              rows={[
+                { label: 'Total source media', value: `Up to ${MAX_PROJECT_SOURCE_ASSETS} per edit`, active: true },
+                { label: 'Required', value: `At least ${RENDER_PRIMARY_VIDEO_LIMIT} video clip` },
+                { label: 'Rendered each time', value: `${RENDER_PRIMARY_VIDEO_LIMIT} primary video + ${RENDER_SUPPORTING_VISUAL_LIMIT} visual layers + ${RENDER_AUDIO_LAYER_LIMIT} audio layer` },
+                { label: 'Allowed types', value: 'Video clips, images, music, SFX' },
+              ]}
+              note="Extra source media stays attached to the project for alternate cuts and prompt-directed variations."
+            />
 
             <button
               type="button"
@@ -1775,7 +1963,7 @@ function EditorPageInner() {
             <ReferenceDropZone
               onFiles={uploadSourceFiles}
               title="Drop source clips, images, music, or SFX"
-              subtitle="At least one video clip is required · A7 renders the primary video plus the strongest supporting layers"
+              subtitle={`${MAX_PROJECT_SOURCE_ASSETS} source items · at least 1 video · video/image ${formatBytes(MAX_UPLOAD_BYTES)} max · audio ${formatBytes(MAX_AUDIO_UPLOAD_BYTES)} max`}
             />
 
             {sourceAssets.length > 0 && (
@@ -1785,7 +1973,7 @@ function EditorPageInner() {
                   {!hasReadySourceVideo && ' · add a video to continue'}
                 </div>
                 <p className="text-xs text-a7-text/35 mb-3">
-                  Project input is unlimited. For reliability, each render uses 1 primary video, up to 4 supporting visuals, and 1 music/SFX layer. Extra media stays saved for future variations.
+                  For reliability, each render uses {RENDER_PRIMARY_VIDEO_LIMIT} primary video, up to {RENDER_SUPPORTING_VISUAL_LIMIT} supporting visuals, and {RENDER_AUDIO_LAYER_LIMIT} music/SFX layer. Extra media stays saved for future variations.
                 </p>
                 <div className="space-y-2">
                   {sourceAssets.map((asset, idx) => (
@@ -2175,6 +2363,9 @@ function EditorPageInner() {
                 <p className="text-a7-text/30 text-xs">
                   {renderState === 'submitting' ? 'Submitting to renderer...' : `Rendering... ${renderProgress}%`}
                 </p>
+                <p className="mt-2 text-a7-text/25 text-[11px]">
+                  {Math.floor(renderElapsedSec / 60)}m {String(renderElapsedSec % 60).padStart(2, '0')}s elapsed · your edit is saved and polling will recover after refresh.
+                </p>
                 {renderNotice && (
                   <p className="mt-3 text-xs" style={{ color: '#E8B06A' }}>
                     {renderNotice}
@@ -2309,6 +2500,8 @@ function EditorPageInner() {
                       setRenderError(null);
                       setRenderNotice(null);
                       setRenderProgress(0);
+                      setRenderStartedAtMs(null);
+                      setRenderElapsedSec(0);
                     }}
                     className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void"
                     style={{ background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }}
@@ -2688,6 +2881,61 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
       <div className="text-xs text-a7-text/40 mb-2 uppercase tracking-wider">{label}</div>
       {children}
     </div>
+  );
+}
+
+function MediaLimitGuide({
+  title,
+  summary,
+  counts,
+  rows,
+  note,
+}: {
+  title: string;
+  summary: string;
+  counts: Record<RefKind, number>;
+  rows: Array<{ label: string; value: string; active?: boolean }>;
+  note: string;
+}) {
+  return (
+    <section
+      className="mb-5 rounded-lg p-4"
+      style={{
+        background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.015))',
+        border: '1px solid rgba(245,240,232,0.08)',
+      }}
+      aria-label={title}
+    >
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between mb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-a7-text">{title}</h3>
+          <p className="text-xs text-a7-text/45">{summary}</p>
+        </div>
+        <div className="text-xs text-a7-text/45 sm:text-right">
+          {counts.video} video · {counts.image} image · {counts.audio} audio
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className="rounded-md px-3 py-2"
+            style={{
+              background: row.active
+                ? 'linear-gradient(135deg, rgba(45,212,191,0.12), rgba(45,212,191,0.035))'
+                : 'rgba(245,240,232,0.025)',
+              border: row.active
+                ? '1px solid rgba(45,212,191,0.22)'
+                : '1px solid rgba(245,240,232,0.05)',
+            }}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-a7-text/35">{row.label}</div>
+            <div className="text-xs text-a7-text/70 mt-0.5">{row.value}</div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-a7-text/35">{note}</p>
+    </section>
   );
 }
 
