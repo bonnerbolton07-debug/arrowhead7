@@ -30,7 +30,6 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     const redirectUri = storedRedirect ?? getRedirectUri('dropbox', request);
-    console.log('[oauth/dropbox/callback] redirect_uri:', redirectUri);
     const tokens = await exchangeDropboxCode(code, redirectUri);
     const account = await fetchDropboxAccount(tokens.access_token);
 

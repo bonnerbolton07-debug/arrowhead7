@@ -38,7 +38,6 @@ export async function GET(request: NextRequest) {
     // back to a freshly-derived URI here is what produces a mismatch on
     // preview deployments and custom domains.
     const redirectUri = storedRedirect ?? getRedirectUri('google-drive', request);
-    console.log('[oauth/google-drive/callback] redirect_uri:', redirectUri);
     const tokens = await exchangeGoogleCode(code, 'google-drive', redirectUri);
     const info = await fetchGoogleUserInfo(tokens.access_token);
 

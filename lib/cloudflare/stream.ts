@@ -4,12 +4,22 @@
 // Video hosting and delivery via Cloudflare Stream.
 // Rendered outputs get uploaded here for playback.
 
-const CF_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID!;
-const CF_API_TOKEN = process.env.CLOUDFLARE_STREAM_API_TOKEN!;
-const CF_STREAM_BASE = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/stream`;
+function getStreamConfig() {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_STREAM_API_TOKEN;
+  if (!accountId || !apiToken) {
+    throw new Error('Cloudflare Stream is not configured. Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_STREAM_API_TOKEN.');
+  }
+  return {
+    accountId,
+    apiToken,
+    baseUrl: `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`,
+  };
+}
 
 function getHeaders(json = false): Record<string, string> {
-  const h: Record<string, string> = { Authorization: `Bearer ${CF_API_TOKEN}` };
+  const { apiToken } = getStreamConfig();
+  const h: Record<string, string> = { Authorization: `Bearer ${apiToken}` };
   if (json) h['Content-Type'] = 'application/json';
   return h;
 }
@@ -24,7 +34,8 @@ export async function uploadFromUrl(
   videoUrl: string,
   meta?: { name?: string; editId?: string }
 ): Promise<{ uid: string; playbackUrl: string; thumbnailUrl: string }> {
-  const response = await fetch(`${CF_STREAM_BASE}/copy`, {
+  const { accountId, baseUrl } = getStreamConfig();
+  const response = await fetch(`${baseUrl}/copy`, {
     method: 'POST',
     headers: getHeaders(true),
     body: JSON.stringify({
@@ -44,8 +55,8 @@ export async function uploadFromUrl(
 
   return {
     uid: video.uid,
-    playbackUrl: `https://customer-${CF_ACCOUNT_ID}.cloudflarestream.com/${video.uid}/manifest/video.m3u8`,
-    thumbnailUrl: `https://customer-${CF_ACCOUNT_ID}.cloudflarestream.com/${video.uid}/thumbnails/thumbnail.jpg`,
+    playbackUrl: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/manifest/video.m3u8`,
+    thumbnailUrl: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/thumbnails/thumbnail.jpg`,
   };
 }
 
@@ -57,7 +68,8 @@ export async function getTusUploadUrl(
   maxDurationSeconds: number,
   meta?: Record<string, string>
 ): Promise<string> {
-  const response = await fetch(CF_STREAM_BASE, {
+  const { baseUrl } = getStreamConfig();
+  const response = await fetch(baseUrl, {
     method: 'POST',
     headers: {
       ...getHeaders(),
@@ -90,7 +102,8 @@ export async function getVideoDetails(uid: string): Promise<{
   thumbnailUrl: string;
   size: number;
 }> {
-  const response = await fetch(`${CF_STREAM_BASE}/${uid}`, {
+  const { accountId, baseUrl } = getStreamConfig();
+  const response = await fetch(`${baseUrl}/${uid}`, {
     headers: getHeaders(),
   });
 
@@ -106,8 +119,8 @@ export async function getVideoDetails(uid: string): Promise<{
     status: video.status?.state || 'unknown',
     duration: video.duration || 0,
     readyToStream: video.readyToStream || false,
-    playbackUrl: `https://customer-${CF_ACCOUNT_ID}.cloudflarestream.com/${video.uid}/manifest/video.m3u8`,
-    thumbnailUrl: `https://customer-${CF_ACCOUNT_ID}.cloudflarestream.com/${video.uid}/thumbnails/thumbnail.jpg`,
+    playbackUrl: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/manifest/video.m3u8`,
+    thumbnailUrl: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/thumbnails/thumbnail.jpg`,
     size: video.size || 0,
   };
 }
@@ -128,7 +141,9 @@ export function getEmbedUrl(uid: string, options?: {
   if (options?.controls === false) params.set('controls', 'false');
 
   const query = params.toString();
-  return `https://customer-${CF_ACCOUNT_ID}.cloudflarestream.com/${uid}/iframe${query ? `?${query}` : ''}`;
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (!accountId) throw new Error('Cloudflare Stream is not configured. Missing CLOUDFLARE_ACCOUNT_ID.');
+  return `https://customer-${accountId}.cloudflarestream.com/${uid}/iframe${query ? `?${query}` : ''}`;
 }
 
 // ─── Delete ──────────────────────────────────────────────────────────────────
@@ -137,7 +152,8 @@ export function getEmbedUrl(uid: string, options?: {
  * Delete a video from Cloudflare Stream.
  */
 export async function deleteVideo(uid: string): Promise<void> {
-  const response = await fetch(`${CF_STREAM_BASE}/${uid}`, {
+  const { baseUrl } = getStreamConfig();
+  const response = await fetch(`${baseUrl}/${uid}`, {
     method: 'DELETE',
     headers: getHeaders(),
   });

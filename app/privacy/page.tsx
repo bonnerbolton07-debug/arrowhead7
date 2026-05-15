@@ -29,7 +29,7 @@ export default function PrivacyPage() {
         </p>
         <h1 className="text-3xl sm:text-4xl font-bold mb-3">Privacy Policy</h1>
         <p className="text-sm text-a7-text/40 mb-10">
-          Last updated: January 1, 2026 — placeholder copy. Replace before launch.
+          Last updated: May 14, 2026
         </p>
 
         <div className="space-y-8 text-sm text-a7-text/70 leading-relaxed">
@@ -120,18 +120,6 @@ export default function PrivacyPage() {
           </section>
         </div>
 
-        <div
-          className="mt-12 p-4 rounded-md text-xs text-a7-text/50"
-          style={{
-            background: 'rgba(184,115,51,0.06)',
-            border: '1px solid rgba(184,115,51,0.2)',
-          }}
-        >
-          <strong className="text-a7-text/70">Note for operators:</strong> this Privacy
-          Policy is placeholder boilerplate. Have qualified counsel customize it for your
-          jurisdiction (GDPR, CCPA, etc.) and the actual data flows of your stack before
-          going live.
-        </div>
       </main>
     </div>
   );

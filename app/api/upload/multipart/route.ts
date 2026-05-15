@@ -33,6 +33,8 @@ export const dynamic = 'force-dynamic';
 
 const ALLOWED_VIDEO = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']);
 const ALLOWED_IMAGE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif', 'image/avif']);
+const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,14 +44,27 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case 'create': {
-        const { filename, contentType, kind, editId } = body;
+        const { filename, contentType, kind, editId, size } = body;
         if (!filename || !contentType) {
           return NextResponse.json({ error: 'Missing filename or contentType' }, { status: 400 });
+        }
+        if (typeof filename !== 'string' || filename.length > 180 || /[\\/]/.test(filename)) {
+          return NextResponse.json({ error: 'Invalid filename' }, { status: 400 });
         }
         const isImage = kind === 'reference-image';
         const allowed = isImage ? ALLOWED_IMAGE : ALLOWED_VIDEO;
         if (!allowed.has(contentType)) {
           return NextResponse.json({ error: 'Unsupported content type' }, { status: 400 });
+        }
+        if (typeof size !== 'number') {
+          return NextResponse.json({ error: 'Missing file size' }, { status: 400 });
+        }
+        const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+        if (!Number.isFinite(size) || size <= 0 || size > maxBytes) {
+          return NextResponse.json(
+            { error: isImage ? 'Image must be 25MB or smaller.' : 'Video must be 500MB or smaller.' },
+            { status: 400 }
+          );
         }
         const id = editId || uuidv4();
         const key = isImage

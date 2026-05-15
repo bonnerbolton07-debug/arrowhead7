@@ -12,21 +12,21 @@ const nextConfig = {
       },
     ],
   },
-  // The ffmpeg / ffprobe installer packages bundle platform-specific binaries
-  // via dynamic requires that webpack can't statically resolve. Keep them
-  // external so they're loaded at runtime from node_modules instead of being
-  // pulled into the webpack graph.
-  experimental: {
-    serverComponentsExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffprobe-installer/ffprobe'],
-  },
   // Force Vercel to include the ffmpeg/ffprobe binaries in the Lambda bundle.
   // Without this, output-file-tracing misses the dynamically-resolved binary
   // paths and the Lambda throws ENOENT at runtime.
-  outputFileTracingIncludes: {
-    '/api/style-dna/analyze': [
-      './node_modules/@ffmpeg-installer/**/*',
-      './node_modules/@ffprobe-installer/**/*',
-    ],
+  experimental: {
+    serverComponentsExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffprobe-installer/ffprobe'],
+    outputFileTracingIncludes: {
+      '/api/style-dna/analyze': [
+        './node_modules/@ffmpeg-installer/**/*',
+        './node_modules/@ffprobe-installer/**/*',
+      ],
+      '/api/style-dna/match': [
+        './node_modules/@ffmpeg-installer/**/*',
+        './node_modules/@ffprobe-installer/**/*',
+      ],
+    },
   },
   async headers() {
     return [

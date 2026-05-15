@@ -40,11 +40,11 @@ export function fbClientCreds(): { appId: string; appSecret: string } {
   return { appId, appSecret };
 }
 
-export function buildInstagramAuthUrl(state: string): string {
+export function buildInstagramAuthUrl(state: string, redirectUri = getRedirectUri('instagram')): string {
   const { appId } = fbClientCreds();
   const params = new URLSearchParams({
     client_id: appId,
-    redirect_uri: getRedirectUri('instagram'),
+    redirect_uri: redirectUri,
     response_type: 'code',
     scope: INSTAGRAM_SCOPES.join(','),
     state,
@@ -53,13 +53,14 @@ export function buildInstagramAuthUrl(state: string): string {
 }
 
 export async function exchangeInstagramCode(
-  code: string
+  code: string,
+  redirectUri = getRedirectUri('instagram')
 ): Promise<OAuthTokens> {
   const { appId, appSecret } = fbClientCreds();
   const params = new URLSearchParams({
     client_id: appId,
     client_secret: appSecret,
-    redirect_uri: getRedirectUri('instagram'),
+    redirect_uri: redirectUri,
     code,
   });
   const res = await fetch(`${FB_TOKEN}?${params.toString()}`);

@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { exchangeXCode, fetchXUser } from '@/lib/distribute/x';
-import { readAndClearState, verifyState } from '@/lib/oauth/state';
+import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,8 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, verifier, nextPath } = await readAndClearState('x');
+  const { state: expectedState, verifier, nextPath, redirectUri: storedRedirect } =
+    await readAndClearState('x');
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -29,7 +30,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
-    const tokens = await exchangeXCode({ code, verifier });
+    const redirectUri = storedRedirect ?? getRedirectUri('x', request);
+    const tokens = await exchangeXCode({ code, verifier, redirectUri });
     const info = await fetchXUser(tokens.access_token);
 
     await upsertChannel({

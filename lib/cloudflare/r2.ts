@@ -17,22 +17,33 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
 
-const R2_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID!;
-const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY_ID!;
-const R2_SECRET_KEY = process.env.R2_SECRET_ACCESS_KEY!;
-const R2_BUCKET = process.env.R2_BUCKET_NAME || 'arrowhead7-processing';
+function getR2Config() {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const bucket = process.env.R2_BUCKET_NAME || 'arrowhead7-processing';
+
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error('R2 is not configured. Missing CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, or R2_SECRET_ACCESS_KEY.');
+  }
+
+  return { accountId, accessKeyId, secretAccessKey, bucket };
+}
 
 /**
  * R2 client using S3-compatible API.
  */
 function getR2Client(): S3Client {
+  const { accountId, accessKeyId, secretAccessKey } = getR2Config();
+
   return new S3Client({
     region: 'auto',
-    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     credentials: {
-      accessKeyId: R2_ACCESS_KEY,
-      secretAccessKey: R2_SECRET_KEY,
+      accessKeyId,
+      secretAccessKey,
     },
   });
 }
@@ -49,9 +60,10 @@ export async function uploadToR2(
   contentType: string
 ): Promise<string> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
 
   await client.send(new PutObjectCommand({
-    Bucket: R2_BUCKET,
+    Bucket: bucket,
     Key: key,
     Body: body as any,
     ContentType: contentType,
@@ -70,9 +82,10 @@ export async function getPresignedUploadUrl(
   expiresInSeconds = 3600
 ): Promise<string> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
 
   const command = new PutObjectCommand({
-    Bucket: R2_BUCKET,
+    Bucket: bucket,
     Key: key,
     ContentType: contentType,
   });
@@ -90,9 +103,10 @@ export async function getPresignedDownloadUrl(
   expiresInSeconds = 3600
 ): Promise<string> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
 
   const command = new GetObjectCommand({
-    Bucket: R2_BUCKET,
+    Bucket: bucket,
     Key: key,
   });
 
@@ -107,9 +121,10 @@ export async function getPresignedDownloadUrl(
  */
 export async function deleteFromR2(key: string): Promise<void> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
 
   await client.send(new DeleteObjectCommand({
-    Bucket: R2_BUCKET,
+    Bucket: bucket,
     Key: key,
   }));
 }
@@ -120,7 +135,7 @@ export async function deleteFromR2(key: string): Promise<void> {
  * Generate a unique R2 key for a source video upload.
  */
 export function generateSourceKey(userId: string, editId: string, filename: string): string {
-  const ext = filename.split('.').pop() || 'mp4';
+  const ext = safeExtension(filename, 'mp4');
   return `sources/${userId}/${editId}/source.${ext}`;
 }
 
@@ -136,8 +151,8 @@ export function generateProcessingKey(editId: string, step: string): string {
  * Keys land under `references/` so the analyzer can recognise them.
  */
 export function generateReferenceImageKey(userId: string, editId: string, filename: string): string {
-  const ext = (filename.split('.').pop() || 'jpg').toLowerCase();
-  const slug = Math.random().toString(36).slice(2, 10);
+  const ext = safeExtension(filename, 'jpg');
+  const slug = randomUUID();
   return `references/${userId}/${editId}/${slug}.${ext}`;
 }
 
@@ -159,9 +174,10 @@ export async function createMultipartUpload(
   contentType: string
 ): Promise<MultipartCreateResult> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
   const result = await client.send(
     new CreateMultipartUploadCommand({
-      Bucket: R2_BUCKET,
+      Bucket: bucket,
       Key: key,
       ContentType: contentType,
     })
@@ -178,8 +194,9 @@ export async function getPresignedUploadPartUrl(
   expiresInSeconds = 3600
 ): Promise<string> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
   const command = new UploadPartCommand({
-    Bucket: R2_BUCKET,
+    Bucket: bucket,
     Key: key,
     UploadId: uploadId,
     PartNumber: partNumber,
@@ -199,9 +216,10 @@ export async function completeMultipartUpload(
   parts: CompletedPart[]
 ): Promise<void> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
   await client.send(
     new CompleteMultipartUploadCommand({
-      Bucket: R2_BUCKET,
+      Bucket: bucket,
       Key: key,
       UploadId: uploadId,
       MultipartUpload: {
@@ -220,9 +238,10 @@ export async function abortMultipartUpload(
   uploadId: string
 ): Promise<void> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
   await client.send(
     new AbortMultipartUploadCommand({
-      Bucket: R2_BUCKET,
+      Bucket: bucket,
       Key: key,
       UploadId: uploadId,
     })
@@ -246,7 +265,12 @@ function sanitizeFilename(name: string): string {
 }
 
 function randomSlug(): string {
-  return Math.random().toString(36).slice(2, 10);
+  return randomUUID();
+}
+
+function safeExtension(filename: string, fallback: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() || fallback;
+  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : fallback;
 }
 
 export function generateVaultKey(
@@ -282,12 +306,13 @@ export interface R2Object {
 
 export async function listR2(prefix: string, max = 1000): Promise<R2Object[]> {
   const client = getR2Client();
+  const { bucket } = getR2Config();
   const out: R2Object[] = [];
   let continuationToken: string | undefined;
   do {
     const res = await client.send(
       new ListObjectsV2Command({
-        Bucket: R2_BUCKET,
+        Bucket: bucket,
         Prefix: prefix,
         ContinuationToken: continuationToken,
         MaxKeys: Math.min(1000, max - out.length),
@@ -311,7 +336,8 @@ export async function listR2(prefix: string, max = 1000): Promise<R2Object[]> {
 export async function headR2(key: string): Promise<{ size: number; contentType?: string } | null> {
   try {
     const client = getR2Client();
-    const res = await client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    const { bucket } = getR2Config();
+    const res = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
     return {
       size: typeof res.ContentLength === 'number' ? res.ContentLength : 0,
       contentType: res.ContentType,

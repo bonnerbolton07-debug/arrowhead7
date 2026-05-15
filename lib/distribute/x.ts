@@ -44,12 +44,13 @@ export function xClientCreds(): { clientId: string; clientSecret?: string } {
 export function buildXAuthUrl(opts: {
   state: string;
   challenge: string;
+  redirectUri?: string;
 }): string {
   const { clientId } = xClientCreds();
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: clientId,
-    redirect_uri: getRedirectUri('x'),
+    redirect_uri: opts.redirectUri ?? getRedirectUri('x'),
     scope: X_SCOPES.join(' '),
     state: opts.state,
     code_challenge: opts.challenge,
@@ -67,13 +68,14 @@ function basicAuth(): string | null {
 export async function exchangeXCode(opts: {
   code: string;
   verifier: string;
+  redirectUri?: string;
 }): Promise<OAuthTokens> {
   const { clientId } = xClientCreds();
   const body = new URLSearchParams({
     code: opts.code,
     grant_type: 'authorization_code',
     client_id: clientId,
-    redirect_uri: getRedirectUri('x'),
+    redirect_uri: opts.redirectUri ?? getRedirectUri('x'),
     code_verifier: opts.verifier,
   });
   const headers: Record<string, string> = {

@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getRedirectUri } from '@/lib/oauth/state';
+import { requireUser } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,17 @@ const PROVIDERS = [
 ] as const;
 
 export async function GET(request: NextRequest) {
+  if (
+    process.env.NODE_ENV === 'production' &&
+    process.env.ENABLE_PUBLIC_AUTH_DIAGNOSTIC !== 'true'
+  ) {
+    try {
+      await requireUser();
+    } catch {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  }
+
   const envBase = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? null;
   const requestOrigin = request.nextUrl.origin;
 

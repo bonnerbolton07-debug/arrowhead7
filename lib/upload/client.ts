@@ -159,6 +159,7 @@ async function uploadSingle(file: File, opts: UploadOptions): Promise<UploadResu
     body: JSON.stringify({
       filename: file.name,
       contentType: file.type,
+      size: file.size,
       kind: opts.kind === 'reference-image' ? 'reference-image' : undefined,
     }),
     signal: opts.signal,
@@ -240,6 +241,7 @@ async function uploadMultipart(file: File, opts: UploadOptions): Promise<UploadR
         action: 'create',
         filename: file.name,
         contentType: file.type,
+        size: file.size,
         kind: opts.kind === 'reference-image' ? 'reference-image' : undefined,
       }),
       signal: opts.signal,

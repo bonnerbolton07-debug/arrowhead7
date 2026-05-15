@@ -22,26 +22,31 @@ import type { SubscriptionTier } from '@/types';
 import type { WhisperTranscription } from '@/lib/captions/whisper';
 import { buildCaptionTrack, type CaptionStyle } from '@/lib/captions/burn-in';
 
-const SHOTSTACK_API_URL = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
-const isProduction = SHOTSTACK_API_URL.includes('/v1');
-const SHOTSTACK_API_KEY = isProduction
-  ? process.env.SHOTSTACK_PROD_API_KEY!
-  : process.env.SHOTSTACK_STAGE_API_KEY!;
+function getShotstackConfig() {
+  const apiUrl = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
+  const isProduction = apiUrl.includes('/v1');
+  const apiKey = isProduction
+    ? process.env.SHOTSTACK_PROD_API_KEY
+    : process.env.SHOTSTACK_STAGE_API_KEY;
+  if (!apiKey) {
+    throw new Error(isProduction ? 'SHOTSTACK_PROD_API_KEY is not configured' : 'SHOTSTACK_STAGE_API_KEY is not configured');
+  }
+  return { apiUrl, apiKey };
+}
 
 function getHeaders(): Record<string, string> {
-  if (!SHOTSTACK_API_KEY) {
-    throw new Error('SHOTSTACK_API_KEY is not configured');
-  }
+  const { apiKey } = getShotstackConfig();
   return {
     'Content-Type': 'application/json',
-    'x-api-key': SHOTSTACK_API_KEY,
+    'x-api-key': apiKey,
   };
 }
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 export async function submitRender(config: ShotstackRenderConfig): Promise<string> {
-  const response = await fetch(`${SHOTSTACK_API_URL}/render`, {
+  const { apiUrl } = getShotstackConfig();
+  const response = await fetch(`${apiUrl}/render`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify(config),
@@ -62,7 +67,8 @@ export async function getRenderStatus(renderId: string): Promise<{
   url?: string;
   error?: string;
 }> {
-  const response = await fetch(`${SHOTSTACK_API_URL}/render/${renderId}`, {
+  const { apiUrl } = getShotstackConfig();
+  const response = await fetch(`${apiUrl}/render/${renderId}`, {
     headers: getHeaders(),
   });
 

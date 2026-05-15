@@ -50,11 +50,23 @@ export async function GET(request: NextRequest) {
     // If Shotstack is done, fan-out the output to both Cloudflare Stream
     // (for playback) and the user's vault `/exports` folder on R2.
     if (shotstackStatus.status === 'done' && shotstackStatus.url) {
-      // Upload rendered video to Cloudflare Stream for playback.
-      const streamResult = await uploadFromUrl(shotstackStatus.url, {
-        name: `edit-${job.edit_id}`,
-        editId: job.edit_id,
-      });
+      // Upload rendered video to Cloudflare Stream for playback. This is the
+      // preferred playback path, but it must not turn a completed Shotstack
+      // render into a failed editor flow if Stream config is missing or down.
+      let streamResult: { uid: string; playbackUrl: string; thumbnailUrl: string };
+      try {
+        streamResult = await uploadFromUrl(shotstackStatus.url, {
+          name: `edit-${job.edit_id}`,
+          editId: job.edit_id,
+        });
+      } catch (err) {
+        console.error('Cloudflare Stream upload failed; using Shotstack output URL as fallback', err);
+        streamResult = {
+          uid: '',
+          playbackUrl: shotstackStatus.url,
+          thumbnailUrl: '',
+        };
+      }
 
       // Copy to the user's vault `/exports` folder. We do this best-effort —
       // failure here shouldn't block the success response, the user can still
@@ -89,10 +101,10 @@ export async function GET(request: NextRequest) {
             folder: 'exports',
             source: 'render',
             editId: job.edit_id,
-            thumbnailUrl: streamResult.thumbnailUrl,
+            thumbnailUrl: streamResult.thumbnailUrl || undefined,
             metadata: {
               shotstack_render_id: job.shotstack_render_id,
-              stream_uid: streamResult.uid,
+              stream_uid: streamResult.uid || undefined,
             },
           });
           vaultFileId = file?.id ?? null;
@@ -117,8 +129,8 @@ export async function GET(request: NextRequest) {
         .update({
           status: 'completed',
           output_video_url: streamResult.playbackUrl,
-          output_stream_uid: streamResult.uid,
-          output_thumbnail_url: streamResult.thumbnailUrl,
+          output_stream_uid: streamResult.uid || null,
+          output_thumbnail_url: streamResult.thumbnailUrl || null,
           completed_at: new Date().toISOString(),
         })
         .eq('id', job.edit_id);

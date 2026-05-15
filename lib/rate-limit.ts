@@ -28,8 +28,11 @@ const buckets = new Map<string, number[]>();
 // Periodically drop empty buckets so the map doesn't grow forever. Only
 // schedule the timer in the Node.js runtime; Edge runtime doesn't expose
 // setInterval the same way and would keep the function warm needlessly.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const g = globalThis as any;
+const g = globalThis as typeof globalThis & {
+  __a7RateLimitSweeper?: ReturnType<typeof setInterval> & {
+    unref?: () => void;
+  };
+};
 if (!g.__a7RateLimitSweeper && typeof setInterval !== 'undefined') {
   g.__a7RateLimitSweeper = setInterval(() => {
     const now = Date.now();

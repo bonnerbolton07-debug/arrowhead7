@@ -15,10 +15,16 @@ import {
   type CompletedPart,
 } from '@aws-sdk/client-s3';
 
-const R2_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID!;
-const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY_ID!;
-const R2_SECRET_KEY = process.env.R2_SECRET_ACCESS_KEY!;
-const R2_BUCKET = process.env.R2_BUCKET_NAME || 'arrowhead7-processing';
+function getR2Config() {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const bucket = process.env.R2_BUCKET_NAME || 'arrowhead7-processing';
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error('R2 is not configured. Missing CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, or R2_SECRET_ACCESS_KEY.');
+  }
+  return { accountId, accessKeyId, secretAccessKey, bucket };
+}
 
 // 8 MiB minimum part size for R2 multipart uploads.
 const PART_SIZE = 8 * 1024 * 1024;
@@ -26,12 +32,13 @@ const PART_SIZE = 8 * 1024 * 1024;
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
 
 function r2(): S3Client {
+  const { accountId, accessKeyId, secretAccessKey } = getR2Config();
   return new S3Client({
     region: 'auto',
-    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     credentials: {
-      accessKeyId: R2_ACCESS_KEY,
-      secretAccessKey: R2_SECRET_KEY,
+      accessKeyId,
+      secretAccessKey,
     },
   });
 }
@@ -56,11 +63,12 @@ export async function streamToR2(opts: {
   onProgress?: (bytes: number) => void;
 }): Promise<StreamToR2Result> {
   const client = r2();
+  const { bucket } = getR2Config();
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const create = await client.send(
     new CreateMultipartUploadCommand({
-      Bucket: R2_BUCKET,
+      Bucket: bucket,
       Key: opts.key,
       ContentType: opts.contentType,
     })
@@ -79,7 +87,7 @@ export async function streamToR2(opts: {
     if (!final && buffer.length < PART_SIZE) return;
     const out = await client.send(
       new UploadPartCommand({
-        Bucket: R2_BUCKET,
+        Bucket: bucket,
         Key: opts.key,
         UploadId: uploadId,
         PartNumber: partNumber,
@@ -113,7 +121,7 @@ export async function streamToR2(opts: {
         const chunk = buffer.slice(0, PART_SIZE);
         const out = await client.send(
           new UploadPartCommand({
-            Bucket: R2_BUCKET,
+            Bucket: bucket,
             Key: opts.key,
             UploadId: uploadId,
             PartNumber: partNumber,
@@ -131,7 +139,7 @@ export async function streamToR2(opts: {
 
     await client.send(
       new CompleteMultipartUploadCommand({
-        Bucket: R2_BUCKET,
+        Bucket: bucket,
         Key: opts.key,
         UploadId: uploadId,
         MultipartUpload: { Parts: parts },
@@ -143,7 +151,7 @@ export async function streamToR2(opts: {
     try {
       await client.send(
         new AbortMultipartUploadCommand({
-          Bucket: R2_BUCKET,
+          Bucket: bucket,
           Key: opts.key,
           UploadId: uploadId,
         })

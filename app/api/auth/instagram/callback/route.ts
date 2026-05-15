@@ -9,7 +9,7 @@ import {
   exchangeForLongLivedToken,
   findInstagramAccount,
 } from '@/lib/distribute/instagram';
-import { readAndClearState, verifyState } from '@/lib/oauth/state';
+import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,8 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath } = await readAndClearState('instagram');
+  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+    await readAndClearState('instagram');
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -32,7 +33,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
-    const shortLived = await exchangeInstagramCode(code);
+    const redirectUri = storedRedirect ?? getRedirectUri('instagram', request);
+    const shortLived = await exchangeInstagramCode(code, redirectUri);
     const longLived = await exchangeForLongLivedToken(shortLived.access_token);
 
     const account = await findInstagramAccount(longLived.access_token);

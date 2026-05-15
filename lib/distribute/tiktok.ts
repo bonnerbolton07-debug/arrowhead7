@@ -35,19 +35,19 @@ export function tiktokClientCreds(): { clientKey: string; clientSecret: string }
   return { clientKey, clientSecret };
 }
 
-export function buildTikTokAuthUrl(state: string): string {
+export function buildTikTokAuthUrl(state: string, redirectUri = getRedirectUri('tiktok')): string {
   const { clientKey } = tiktokClientCreds();
   const params = new URLSearchParams({
     client_key: clientKey,
     response_type: 'code',
     scope: TIKTOK_SCOPES.join(','),
-    redirect_uri: getRedirectUri('tiktok'),
+    redirect_uri: redirectUri,
     state,
   });
   return `${TIKTOK_AUTH}?${params.toString()}`;
 }
 
-export async function exchangeTikTokCode(code: string): Promise<OAuthTokens & {
+export async function exchangeTikTokCode(code: string, redirectUri = getRedirectUri('tiktok')): Promise<OAuthTokens & {
   open_id: string;
 }> {
   const { clientKey, clientSecret } = tiktokClientCreds();
@@ -59,7 +59,7 @@ export async function exchangeTikTokCode(code: string): Promise<OAuthTokens & {
       client_secret: clientSecret,
       code,
       grant_type: 'authorization_code',
-      redirect_uri: getRedirectUri('tiktok'),
+      redirect_uri: redirectUri,
     }),
   });
   if (!res.ok) {

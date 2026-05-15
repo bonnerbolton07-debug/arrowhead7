@@ -16,7 +16,6 @@ export async function GET(request: NextRequest) {
     const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('dropbox', request);
-    console.log('[oauth/dropbox/connect] redirect_uri:', redirectUri);
     await setStateCookie('dropbox', state, nextPath, redirectUri);
     return NextResponse.redirect(buildDropboxAuthUrl(state, redirectUri));
   } catch (e) {

@@ -8,6 +8,7 @@ import { buildXAuthUrl, xClientCreds } from '@/lib/distribute/x';
 import {
   generateState,
   generatePkcePair,
+  getRedirectUri,
   setStateCookie,
   setPkceCookie,
 } from '@/lib/oauth/state';
@@ -22,9 +23,10 @@ export async function GET(request: NextRequest) {
     const { verifier, challenge } = generatePkcePair();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
-    await setStateCookie('x', state, nextPath);
+    const redirectUri = getRedirectUri('x', request);
+    await setStateCookie('x', state, nextPath, redirectUri);
     await setPkceCookie('x', verifier);
-    return NextResponse.redirect(buildXAuthUrl({ state, challenge }));
+    return NextResponse.redirect(buildXAuthUrl({ state, challenge, redirectUri }));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

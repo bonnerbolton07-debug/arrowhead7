@@ -18,7 +18,6 @@ export async function GET(request: NextRequest) {
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('youtube', request);
-    console.log('[oauth/youtube/connect] redirect_uri:', redirectUri);
     await setStateCookie('youtube', state, nextPath, redirectUri);
     return NextResponse.redirect(buildYouTubeAuthUrl(state, redirectUri));
   } catch (e) {

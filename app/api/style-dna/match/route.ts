@@ -37,8 +37,24 @@ const Body = z.object({
     ctaText: z.string().optional(),
     generateSoundtrack: z.boolean().optional(),
     referenceSoundtrackKey: z.string().optional(),
+    captions: z.object({
+      transcription: z.unknown(),
+      style: z.enum(['tiktok-bold', 'youtube-bar', 'karaoke']),
+    }).optional(),
   }).optional(),
 });
+
+const SOURCE_ANALYSIS_TIMEOUT_MS = 25_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer!));
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,47 +85,57 @@ export async function POST(request: NextRequest) {
     // Shotstack needs a publicly-fetchable URL; we hand it a 6h presigned URL.
     const renderableUrl = await getPresignedDownloadUrl(sourceKey, 6 * 3600);
 
-    // Analyse source footage locally (downloaded once, used for both scene
-    // detect and audio analysis).
-    const resolved = await resolveSource(sourceKey);
-    let sourceAnalysis;
-    try {
-      const meta = await extractMetadata(resolved.path);
-      const scenes = await detectScenes(resolved.path, meta.duration, 0.25);
-      const audio = await analyzeAudio(resolved.path, meta.has_audio);
-      sourceAnalysis = {
-        totalDuration: meta.duration,
-        segments: scenesToSegments(scenes.cuts),
-        audioBeats: audio.beats,
-        hasSpeech: audio.has_speech,
-        hasMusic: audio.has_music,
-      };
-    } finally {
-      if (resolved.ephemeral) await unlinkQuiet(resolved.path);
-    }
+    // Analyse source footage locally. This is enhancement, not a hard gate:
+    // if download/ffmpeg stalls, render still proceeds with a sane timeline.
+    const targetDuration = options?.targetDuration ?? 30;
+    const sourceAnalysis = await withTimeout((async () => {
+      const resolved = await resolveSource(sourceKey);
+      try {
+        const meta = await extractMetadata(resolved.path);
+        const analyzeDuration = Math.min(meta.duration || targetDuration, Math.max(targetDuration * 2, 30), 90);
+        const scenes = await detectScenes(resolved.path, analyzeDuration, 0.25);
+        const audio = await analyzeAudio(resolved.path, meta.has_audio, analyzeDuration);
+        return {
+          totalDuration: meta.duration || targetDuration,
+          segments: scenesToSegments(scenes.cuts, meta.duration || targetDuration),
+          audioBeats: audio.beats,
+          hasSpeech: audio.has_speech,
+          hasMusic: audio.has_music,
+        };
+      } finally {
+        if (resolved.ephemeral) await unlinkQuiet(resolved.path);
+      }
+    })(), SOURCE_ANALYSIS_TIMEOUT_MS, 'Source footage analysis').catch((err) => {
+      console.warn('[style-dna/match] Source analysis fallback', err instanceof Error ? err.message : err);
+      return fallbackSourceAnalysis(targetDuration);
+    });
 
     // Optional: generate a soundtrack matching the reference vibe.
     let soundtrack: { url: string; duration: number; beats: number[]; provider: string } | undefined;
     if (options?.generateSoundtrack) {
-      const promptFeatures = options.referenceSoundtrackKey
-        ? await analyseReferenceSoundtrack(options.referenceSoundtrackKey)
-        : { prompt: {
-            bpm: dna.pacing.bpm_target ?? 120,
-            duration_seconds: options.targetDuration ?? 30,
-            mood: 'energetic' as const,
-            genre_hints: [] as string[],
-            energy_shape: dna.energy_arc.shape === 'wave' ? 'wave' as const : 'build' as const,
-            spectral_balance: { low: 0.4, mid: 0.4, high: 0.2 },
-            text_prompt: `Original ${dna.pacing.overall_energy}-energy instrumental at ${dna.pacing.bpm_target ?? 120} BPM, ${dna.energy_arc.shape} energy arc, no vocals, no copyrighted melodies`,
-          } };
-      const result = await generateSoundtrack(promptFeatures.prompt);
-      if (result.url) {
-        soundtrack = {
-          url: result.url,
-          duration: result.duration_seconds,
-          beats: result.beats,
-          provider: result.provider,
-        };
+      try {
+        const promptFeatures = options.referenceSoundtrackKey
+          ? await analyseReferenceSoundtrack(options.referenceSoundtrackKey)
+          : { prompt: {
+              bpm: dna.pacing.bpm_target ?? 120,
+              duration_seconds: options.targetDuration ?? 30,
+              mood: 'energetic' as const,
+              genre_hints: [] as string[],
+              energy_shape: dna.energy_arc.shape === 'wave' ? 'wave' as const : 'build' as const,
+              spectral_balance: { low: 0.4, mid: 0.4, high: 0.2 },
+              text_prompt: `Original ${dna.pacing.overall_energy}-energy instrumental at ${dna.pacing.bpm_target ?? 120} BPM, ${dna.energy_arc.shape} energy arc, no vocals, no copyrighted melodies`,
+            } };
+        const result = await generateSoundtrack(promptFeatures.prompt);
+        if (result.url) {
+          soundtrack = {
+            url: result.url,
+            duration: result.duration_seconds,
+            beats: result.beats,
+            provider: result.provider,
+          };
+        }
+      } catch (err) {
+        console.warn('[style-dna/match] Soundtrack fallback: rendering without generated audio', err instanceof Error ? err.message : err);
       }
     }
 
@@ -125,6 +151,10 @@ export async function POST(request: NextRequest) {
         outputFps: options?.outputFps,
         hookText: options?.hookText,
         ctaText: options?.ctaText,
+        captions: options?.captions ? {
+          transcription: options.captions.transcription as any,
+          style: options.captions.style,
+        } : undefined,
         audioUrl: soundtrack?.url,
         audioDuration: soundtrack?.duration,
         beatTimestamps: soundtrack?.beats,
@@ -150,7 +180,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function scenesToSegments(cuts: number[]) {
+function scenesToSegments(cuts: number[], fallbackDuration = 30) {
   const out = [] as Array<{
     startTime: number; endTime: number;
     qualityScore: number; motionLevel: number; energyLevel: number;
@@ -169,5 +199,35 @@ function scenesToSegments(cuts: number[]) {
       contentType: 'b-roll',
     });
   }
+  if (out.length === 0) {
+    return fallbackSourceAnalysis(fallbackDuration).segments;
+  }
   return out;
+}
+
+function fallbackSourceAnalysis(duration: number) {
+  const safeDuration = Math.max(2, Math.min(duration || 30, 180));
+  const segmentLength = Math.min(3, safeDuration);
+  const segments = [] as Array<{
+    startTime: number; endTime: number;
+    qualityScore: number; motionLevel: number; energyLevel: number;
+    contentType: 'b-roll';
+  }>;
+  for (let t = 0; t < safeDuration; t += segmentLength) {
+    segments.push({
+      startTime: t,
+      endTime: Math.min(safeDuration, t + segmentLength),
+      qualityScore: 0.62,
+      motionLevel: 0.5,
+      energyLevel: 0.55,
+      contentType: 'b-roll',
+    });
+  }
+  return {
+    totalDuration: safeDuration,
+    segments,
+    audioBeats: [],
+    hasSpeech: false,
+    hasMusic: false,
+  };
 }

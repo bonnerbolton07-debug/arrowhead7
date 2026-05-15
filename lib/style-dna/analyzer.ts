@@ -97,7 +97,7 @@ export async function analyzeReferenceVideos(
     weight: ref.weight ?? 1 / references.length,
   }));
 
-  const analyses = await Promise.all(styleRefs.map((ref) => analyzeSingleReference(ref, options)));
+  const analyses = await analyzeWithConcurrency(styleRefs, options, 2);
   const composite = blendAnalyses(analyses, styleRefs);
 
   return {
@@ -151,9 +151,31 @@ interface SingleAnalysisResult {
 
 /** Per-reference wall-clock cap. The route-level Promise.race fires at 60s but
  *  doesn't kill in-flight ffmpeg children — we want each reference to fall
- *  back to the heuristic well before the route gives up. 40s leaves headroom
+ *  back to the heuristic well before the route gives up. 25s leaves headroom
  *  for the route to still respond cleanly if blending takes a moment. */
-const PER_REFERENCE_TIMEOUT_MS = 40_000;
+const PER_REFERENCE_TIMEOUT_MS = 25_000;
+
+async function analyzeWithConcurrency(
+  refs: StyleReference[],
+  options: AnalyzeOptions,
+  limit: number
+): Promise<SingleAnalysisResult[]> {
+  const results: SingleAnalysisResult[] = new Array(refs.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= refs.length) return;
+      results[index] = await analyzeSingleReference(refs[index], options);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, refs.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 async function analyzeSingleReference(
   ref: StyleReference,

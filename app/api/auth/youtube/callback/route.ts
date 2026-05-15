@@ -33,7 +33,6 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     const redirectUri = storedRedirect ?? getRedirectUri('youtube', request);
-    console.log('[oauth/youtube/callback] redirect_uri:', redirectUri);
     const tokens = await exchangeYouTubeCode(code, 'youtube', redirectUri);
     const channel = await fetchYouTubeChannel(tokens.access_token);
 

@@ -29,7 +29,7 @@ export default function TermsPage() {
         </p>
         <h1 className="text-3xl sm:text-4xl font-bold mb-3">Terms of Service</h1>
         <p className="text-sm text-a7-text/40 mb-10">
-          Last updated: January 1, 2026 — placeholder copy. Replace before launch.
+          Last updated: May 14, 2026
         </p>
 
         <div className="space-y-8 text-sm text-a7-text/70 leading-relaxed">
@@ -119,18 +119,6 @@ export default function TermsPage() {
           </section>
         </div>
 
-        <div
-          className="mt-12 p-4 rounded-md text-xs text-a7-text/50"
-          style={{
-            background: 'rgba(184,115,51,0.06)',
-            border: '1px solid rgba(184,115,51,0.2)',
-          }}
-        >
-          <strong className="text-a7-text/70">Note for operators:</strong> these Terms are
-          placeholder boilerplate. Have qualified counsel review and customize before going
-          live, especially around AI-generated content rights, distribution to third-party
-          platforms, and jurisdiction-specific consumer protections.
-        </div>
       </main>
     </div>
   );

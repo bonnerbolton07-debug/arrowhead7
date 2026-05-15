@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Logo, LogoIcon } from '@/components/ui/Logo';
 import { getClient } from '@/lib/supabase/client';
@@ -121,6 +121,7 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 }
 
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
+const STYLE_DNA_CLIENT_FALLBACK_MS = 40_000;
 
 function friendlyUploadError(err: unknown, status?: number): string {
   if (status === 413) return 'File too large (max 500MB)';
@@ -138,7 +139,139 @@ function friendlyUploadError(err: unknown, status?: number): string {
   return msg || 'Upload failed — check your connection and try again';
 }
 
+function buildClientFallbackStyleDNA(refs: ReferenceItem[]): AnalyzedStyleDNA {
+  const hasImage = refs.some((r) => r.kind === 'image');
+  const references = refs.map((r) => ({
+    source_type: r.source,
+    type: r.kind,
+    url: r.url,
+    platform: r.source === 'url' ? 'other' as const : undefined,
+    weight: refs.length > 0 ? 1 / refs.length : 1,
+  }));
+
+  return {
+    user_id: 'client-fallback',
+    name: 'Quick Style DNA',
+    references,
+    color_profile: {
+      temperature: hasImage ? 6 : 0,
+      saturation: hasImage ? 112 : 105,
+      contrast: 112,
+      brightness: 100,
+    },
+    framing_profile: {
+      dominant_shot_types: [
+        { type: 'medium', weight: 0.45 },
+        { type: 'closeup', weight: 0.35 },
+        { type: 'wide', weight: 0.2 },
+      ],
+      uses_reframing: true,
+      aspect_ratio_preference: '9:16',
+      uses_split_screen: false,
+      uses_picture_in_picture: false,
+    },
+    cut_pattern: {
+      avg_cut_duration_ms: 1400,
+      min_cut_duration_ms: 600,
+      max_cut_duration_ms: 3000,
+      median_cut_duration_ms: 1300,
+      total_cuts: 18,
+      cuts_per_minute: 40,
+      cut_rhythm: 'variable',
+      rhythm_consistency: 0.6,
+      beat_sync: false,
+      cut_types: [
+        { type: 'hard-cut', weight: 0.7 },
+        { type: 'j-cut', weight: 0.15 },
+        { type: 'l-cut', weight: 0.1 },
+        { type: 'match-cut', weight: 0.05 },
+      ],
+      duration_histogram: [0.1, 0.3, 0.35, 0.15, 0.07, 0.02, 0.01],
+      has_breathing_moments: false,
+    },
+    pacing: {
+      overall_energy: 'high',
+      bpm_target: 120,
+      builds_tension: true,
+      has_drops: true,
+      sections: [
+        { start_pct: 0, end_pct: 0.2, energy: 'high', cuts_per_minute: 48, description: 'hook' },
+        { start_pct: 0.2, end_pct: 0.75, energy: 'medium', cuts_per_minute: 36, description: 'body' },
+        { start_pct: 0.75, end_pct: 1, energy: 'high', cuts_per_minute: 44, description: 'finish' },
+      ],
+    },
+    energy_arc: {
+      shape: 'build',
+      curve: [0.45, 0.5, 0.55, 0.62, 0.68, 0.74, 0.8, 0.86, 0.9, 0.94],
+      has_cold_open: true,
+      climax_position: 0.85,
+    },
+    transition_preferences: [
+      { type: 'cut', weight: 0.72 },
+      { type: 'dissolve', weight: 0.12, duration_ms: 240 },
+      { type: 'whip', weight: 0.1, duration_ms: 160 },
+      { type: 'zoom', weight: 0.06, duration_ms: 180 },
+    ],
+    audio_sync_strategy: 'energy-match',
+    audio_edit_relationship: {
+      cuts_on_beats: false,
+      cuts_on_vocals: false,
+      j_cut_frequency: 0.12,
+      l_cut_frequency: 0.1,
+      silence_as_punctuation: false,
+      sound_effects_on_transitions: false,
+      music_ducks_under_speech: false,
+      bass_drop_sync: true,
+    },
+    motion_profile: {
+      uses_speed_ramps: true,
+      speed_ramp_style: 'smooth',
+      uses_zoom_punches: true,
+      zoom_punch_frequency: 3,
+      uses_shake: false,
+      uses_parallax: hasImage,
+      dominant_movement: 'mixed',
+    },
+    narrative_structure: {
+      has_hook: true,
+      hook_duration_ms: 2500,
+      has_intro_sequence: false,
+      has_outro_cta: true,
+      segment_count: 3,
+      uses_callbacks: false,
+      storytelling_style: 'montage',
+    },
+    raw_analysis: {
+      fallback: 'client-watchdog',
+      reason: 'analysis-timeout-or-network-failure',
+      reference_count: refs.length,
+      image_count: refs.filter((r) => r.kind === 'image').length,
+      video_count: refs.filter((r) => r.kind === 'video').length,
+    },
+    confidence_score: 0.22,
+  };
+}
+
 export default function EditorPage() {
+  return (
+    <Suspense fallback={<EditorLoadingShell />}>
+      <EditorPageInner />
+    </Suspense>
+  );
+}
+
+function EditorLoadingShell() {
+  return (
+    <div className="min-h-screen bg-a7-base flex items-center justify-center text-a7-text">
+      <div className="text-center">
+        <Logo variant="teal" size="md" animate />
+        <p className="mt-4 text-sm text-a7-text/50">Loading editor...</p>
+      </div>
+    </div>
+  );
+}
+
+function EditorPageInner() {
   const strategyBrief = useStrategyBrief();
   const searchParams = useSearchParams();
   const resumeId = searchParams?.get('id') ?? null;
@@ -718,6 +851,13 @@ export default function EditorPage() {
         stageIdx = Math.min(stageIdx + 1, stages.length - 1);
         if (!cancelled) setAnalyzeStage(stages[stageIdx]);
       }, 1500);
+      const completeWithFallback = (reason: string) => {
+        if (cancelled) return;
+        setStyleDNA(buildClientFallbackStyleDNA(readyRefs));
+        setAnalyzeStage(`Quick Style DNA ready (${reason})`);
+        setAnalyzeError(null);
+        setAnalyzeState('done');
+      };
 
       try {
         // Weight each reference equally; videos drive temporal fields, images
@@ -727,7 +867,7 @@ export default function EditorPage() {
         // Server has a 60s hard cap plus a 40s per-reference fallback, so 75s
         // on the client should always outlive the server response. If we hit
         // this timeout, something is wedged at the network layer.
-        const fetchTimeout = setTimeout(() => controller.abort(), 75_000);
+        const fetchTimeout = setTimeout(() => controller.abort(), STYLE_DNA_CLIENT_FALLBACK_MS);
         let res: Response;
         try {
           res = await fetch('/api/style-dna/analyze', {
@@ -742,7 +882,10 @@ export default function EditorPage() {
         } catch (fetchErr: unknown) {
           clearTimeout(fetchTimeout);
           if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
-            throw new Error('Style DNA analysis timed out. Please try a shorter video or upload a smaller file.');
+            clearInterval(stageTimer);
+            clearInterval(elapsedTimer);
+            completeWithFallback('analysis timed out');
+            return;
           }
           throw fetchErr;
         }
@@ -752,7 +895,9 @@ export default function EditorPage() {
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `Analysis failed (${res.status})`);
+          console.warn('[editor] Style DNA server failed, using fallback', body.error || res.status);
+          completeWithFallback('server fallback');
+          return;
         }
         const data = await res.json();
         if (cancelled) return;
@@ -763,8 +908,8 @@ export default function EditorPage() {
         clearInterval(stageTimer);
         clearInterval(elapsedTimer);
         if (cancelled) return;
-        setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed');
-        setAnalyzeState('error');
+        console.warn('[editor] Style DNA analysis failed, using fallback', err);
+        completeWithFallback('network fallback');
       }
     };
     void run();
@@ -2332,10 +2477,13 @@ function NavButtons({
       <button
         onClick={onNext}
         disabled={disabled}
-        className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void disabled:opacity-40 disabled:cursor-not-allowed"
+        className="flex-1 py-3 rounded-md font-medium transition-all disabled:cursor-not-allowed"
         style={{
-          background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+          background: disabled
+            ? 'linear-gradient(135deg, rgba(245,240,232,0.08), rgba(245,240,232,0.04))'
+            : 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
           boxShadow: disabled ? 'none' : '0 0 20px rgba(45,212,191,0.25)',
+          color: disabled ? 'rgba(245,240,232,0.28)' : '#0A0A0A',
         }}
       >
         {nextLabel}

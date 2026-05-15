@@ -21,9 +21,6 @@ export async function GET(request: NextRequest) {
     const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('google-drive', request);
-    // Log the exact URI so the user can copy it into Google Cloud Console
-    // if the request fails. Visible in Vercel function logs.
-    console.log('[oauth/google-drive/connect] redirect_uri:', redirectUri);
     await setStateCookie('google-drive', state, nextPath, redirectUri);
 
     const url = buildGoogleAuthUrl({

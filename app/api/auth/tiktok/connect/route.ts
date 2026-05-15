@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildTikTokAuthUrl, tiktokClientCreds } from '@/lib/distribute/tiktok';
-import { generateState, setStateCookie } from '@/lib/oauth/state';
+import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,8 +16,9 @@ export async function GET(request: NextRequest) {
     const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
-    await setStateCookie('tiktok', state, nextPath);
-    return NextResponse.redirect(buildTikTokAuthUrl(state));
+    const redirectUri = getRedirectUri('tiktok', request);
+    await setStateCookie('tiktok', state, nextPath, redirectUri);
+    return NextResponse.redirect(buildTikTokAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {
