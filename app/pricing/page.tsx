@@ -41,10 +41,11 @@ async function getCurrentTier(): Promise<{
 export default async function PricingPage({
   searchParams,
 }: {
-  searchParams: Record<string, string | undefined>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  const sp = await searchParams;
   const { tier, signedIn } = await getCurrentTier();
-  const cancelled = searchParams.checkout === 'cancelled';
+  const cancelled = sp.checkout === 'cancelled';
 
   return (
     <div className="min-h-screen bg-a7-void text-a7-text">

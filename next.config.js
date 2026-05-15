@@ -15,18 +15,16 @@ const nextConfig = {
   // Force Vercel to include the ffmpeg/ffprobe binaries in the Lambda bundle.
   // Without this, output-file-tracing misses the dynamically-resolved binary
   // paths and the Lambda throws ENOENT at runtime.
-  experimental: {
-    serverComponentsExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffprobe-installer/ffprobe'],
-    outputFileTracingIncludes: {
-      '/api/style-dna/analyze': [
-        './node_modules/@ffmpeg-installer/**/*',
-        './node_modules/@ffprobe-installer/**/*',
-      ],
-      '/api/style-dna/match': [
-        './node_modules/@ffmpeg-installer/**/*',
-        './node_modules/@ffprobe-installer/**/*',
-      ],
-    },
+  serverExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffprobe-installer/ffprobe'],
+  outputFileTracingIncludes: {
+    '/api/style-dna/analyze': [
+      './node_modules/@ffmpeg-installer/**/*',
+      './node_modules/@ffprobe-installer/**/*',
+    ],
+    '/api/style-dna/match': [
+      './node_modules/@ffmpeg-installer/**/*',
+      './node_modules/@ffprobe-installer/**/*',
+    ],
   },
   async headers() {
     return [

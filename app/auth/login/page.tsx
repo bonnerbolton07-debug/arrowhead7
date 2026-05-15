@@ -5,10 +5,11 @@ export const metadata = {
   description: 'Sign in to your Arrowhead 7 account.',
 };
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { error?: string; message?: string; next?: string };
+  searchParams: Promise<{ error?: string; message?: string; next?: string }>;
 }) {
-  return <LoginForm error={searchParams.error} message={searchParams.message} next={searchParams.next} />;
+  const sp = await searchParams;
+  return <LoginForm error={sp.error} message={sp.message} next={sp.next} />;
 }

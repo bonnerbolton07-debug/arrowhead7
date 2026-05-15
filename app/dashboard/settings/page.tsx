@@ -129,10 +129,11 @@ async function loadData(searchParams: Record<string, string | undefined>) {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Record<string, string | undefined>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  const sp = await searchParams;
   const { user, profile, notificationPrefs, apiKeys, connectedAccounts, checkoutResult } =
-    await loadData(searchParams);
+    await loadData(sp);
 
   return (
     <DashboardShell
