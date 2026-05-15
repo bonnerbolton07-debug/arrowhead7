@@ -1530,8 +1530,40 @@ function EditorPageInner() {
     void pollStatus(renderJobId);
   }, [renderState, renderJobId, pollStatus]);
 
-  const buildMatch = useCallback(async (captionsPayload?: unknown): Promise<{ ok: boolean; error?: string }> => {
-    if (!editId || !styleDNA) {
+  const ensureDraftEditId = useCallback(async (): Promise<string | null> => {
+    if (editId) return editId;
+    if (!primarySourceKey) return null;
+
+    const draftId = makeUuid();
+    setEditId(draftId);
+    try {
+      const supabase = getClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('edits').upsert({
+          id: draftId,
+          user_id: user.id,
+          title: primarySourceAsset?.label?.replace(/\.[^.]+$/, '') || 'Untitled edit',
+          status: 'draft',
+          source_video_url: primarySourceKey,
+          reference_urls: readyRefs.map((r) => r.url),
+        });
+      }
+    } catch {
+      // The render route can still validate ownership if the row already
+      // exists; if this was a missing draft, render will surface the error.
+    }
+    return draftId;
+  }, [editId, primarySourceAsset?.label, primarySourceKey, readyRefs]);
+
+  const buildMatch = useCallback(async (
+    captionsPayload?: unknown,
+    dnaOverride?: AnalyzedStyleDNA,
+    editIdOverride?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const activeEditId = editIdOverride ?? editId;
+    const activeStyleDNA = dnaOverride ?? styleDNA;
+    if (!activeEditId || !activeStyleDNA) {
       const msg = 'Style DNA missing — go back and run analysis';
       setMatchError(msg);
       return { ok: false, error: msg };
@@ -1545,8 +1577,8 @@ function EditorPageInner() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            editId,
-            styleDNA,
+            editId: activeEditId,
+            styleDNA: activeStyleDNA,
             options: {
               targetDuration,
               platform,
@@ -1630,27 +1662,39 @@ function EditorPageInner() {
   }, [readyRefs]);
 
   const startRender = useCallback(async () => {
-    if (!editId || !primarySourceKey) {
+    if (!primarySourceKey) {
       setRenderError('Upload at least one video clip before rendering.');
-      return;
-    }
-    if (!styleDNA) {
-      setRenderError('Style DNA is missing — go back and analyze the reference.');
       return;
     }
     setRenderState('submitting');
     setRenderError(null);
-    setRenderNotice(null);
+    setRenderNotice('Checking render setup...');
     setRenderProgress(0);
     setRenderStartedAtMs(Date.now());
     setRenderElapsedSec(0);
 
     try {
+      const activeEditId = await ensureDraftEditId();
+      if (!activeEditId) throw new Error('A7 could not attach this render to a saved edit. Go back to Source Media and re-add the primary video.');
+
+      let activeStyleDNA = styleDNA;
+      if (!activeStyleDNA && readyRefs.length > 0) {
+        activeStyleDNA = buildClientFallbackStyleDNA(readyRefs);
+        setStyleDNA(activeStyleDNA);
+        setAnalyzeState('done');
+        setAnalyzeStage('Quick Style DNA ready (render preflight)');
+      }
+      if (!activeStyleDNA) {
+        throw new Error('Style DNA is missing. Go back to References and add at least one ready reference.');
+      }
+
       // Optional: run Whisper transcription so the match step can layer in captions.
+      if (autoCaptions) setRenderNotice('Preparing captions...');
       const transcription = autoCaptions ? await transcribeForCaptions() : null;
 
       // Build the render config from Style DNA + source footage (server-side).
-      const matched = await buildMatch(transcription ?? undefined);
+      setRenderNotice('Building render plan...');
+      const matched = await buildMatch(transcription ?? undefined, activeStyleDNA, activeEditId);
       if (!matched.ok) {
         setRenderState('failed');
         setRenderStartedAtMs(null);
@@ -1668,7 +1712,7 @@ function EditorPageInner() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ editId }),
+          body: JSON.stringify({ editId: activeEditId }),
         },
         RENDER_SUBMIT_TIMEOUT_MS,
         'Render submission'
@@ -1688,7 +1732,7 @@ function EditorPageInner() {
       setRenderStartedAtMs(null);
       setRenderError(err instanceof Error ? err.message : 'Render failed. Your project is saved and you can try again.');
     }
-  }, [editId, primarySourceKey, styleDNA, buildMatch, autoCaptions, transcribeForCaptions]);
+  }, [primarySourceKey, ensureDraftEditId, styleDNA, readyRefs, autoCaptions, transcribeForCaptions, buildMatch]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -2314,6 +2358,7 @@ function EditorPageInner() {
                 )}
                 <div className="flex gap-3">
                   <button
+                    type="button"
                     onClick={back}
                     className="flex-1 py-3 rounded-md font-medium text-sm transition-all"
                     style={{
@@ -2325,6 +2370,7 @@ function EditorPageInner() {
                     Back
                   </button>
                   <button
+                    type="button"
                     onClick={startRender}
                     className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void"
                     style={{
@@ -2484,6 +2530,7 @@ function EditorPageInner() {
                 </p>
                 <div className="flex gap-3">
                   <button
+                    type="button"
                     onClick={back}
                     className="flex-1 py-3 rounded-md font-medium text-sm transition-all"
                     style={{
@@ -2495,14 +2542,8 @@ function EditorPageInner() {
                     Back
                   </button>
                   <button
-                    onClick={() => {
-                      setRenderState('idle');
-                      setRenderError(null);
-                      setRenderNotice(null);
-                      setRenderProgress(0);
-                      setRenderStartedAtMs(null);
-                      setRenderElapsedSec(0);
-                    }}
+                    type="button"
+                    onClick={startRender}
                     className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void"
                     style={{ background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }}
                   >
