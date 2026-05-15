@@ -369,7 +369,8 @@ function EditorPageInner() {
     [sourceAssets]
   );
   const primarySourceAsset = readySourceAssets.find((r) => r.kind === 'video') ?? null;
-  const hasReadySourceVideo = Boolean(primarySourceAsset || footageR2Key);
+  const primarySourceKey = footageR2Key ?? primarySourceAsset?.url ?? null;
+  const hasReadySourceVideo = Boolean(primarySourceKey);
 
   // Step 3 — Style DNA analysis
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle');
@@ -1387,7 +1388,7 @@ function EditorPageInner() {
   }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, editPrompt, generateSoundtrack, soundtrackR2Key, readySourceAssets, captionStyle]);
 
   const transcribeForCaptions = useCallback(async (): Promise<unknown | null> => {
-    if (!autoCaptions || !footageR2Key) return null;
+    if (!autoCaptions || !primarySourceKey || /^https?:\/\//i.test(primarySourceKey)) return null;
     if (captionState === 'done' && captionTranscription) return captionTranscription;
 
     setCaptionState('transcribing');
@@ -1396,7 +1397,7 @@ function EditorPageInner() {
       const res = await fetch('/api/captions/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ r2Key: footageR2Key }),
+        body: JSON.stringify({ r2Key: primarySourceKey }),
       });
       const data = await res.json();
       if (res.status === 503) {
@@ -1417,7 +1418,7 @@ function EditorPageInner() {
       setCaptionError(err instanceof Error ? err.message : 'Transcription failed');
       return null;
     }
-  }, [autoCaptions, footageR2Key, captionState, captionTranscription]);
+  }, [autoCaptions, primarySourceKey, captionState, captionTranscription]);
 
   const applyQuickStyleDNA = useCallback((reason = 'manual fallback') => {
     if (readyRefs.length === 0) return;
@@ -1429,7 +1430,7 @@ function EditorPageInner() {
   }, [readyRefs]);
 
   const startRender = useCallback(async () => {
-    if (!editId || !footageR2Key) {
+    if (!editId || !primarySourceKey) {
       setRenderError('Upload at least one video clip before rendering.');
       return;
     }
@@ -1468,7 +1469,7 @@ function EditorPageInner() {
       setRenderState('failed');
       setRenderError(err instanceof Error ? err.message : 'Render failed');
     }
-  }, [editId, footageR2Key, styleDNA, buildMatch, pollStatus, autoCaptions, transcribeForCaptions]);
+  }, [editId, primarySourceKey, styleDNA, buildMatch, pollStatus, autoCaptions, transcribeForCaptions]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -2055,6 +2056,11 @@ function EditorPageInner() {
                 <p className="text-a7-text/40 text-sm mb-8">
                   This will spend 1 credit. Cloud rendering usually takes 2&ndash;5 minutes.
                 </p>
+                {renderError && (
+                  <p className="mb-4 text-sm" style={{ color: '#E8B06A' }}>
+                    {renderError}
+                  </p>
+                )}
                 <div className="flex gap-3">
                   <button
                     onClick={back}
