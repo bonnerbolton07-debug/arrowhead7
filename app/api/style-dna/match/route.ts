@@ -14,7 +14,7 @@ import { resolveSource } from '@/lib/style-dna/source';
 import { unlinkQuiet } from '@/lib/style-dna/ffmpeg-runner';
 import { extractMetadata, detectScenes } from '@/lib/style-dna/probe';
 import { analyzeAudio } from '@/lib/style-dna/audio';
-import { buildTimelineFromStyleDNA } from '@/lib/shotstack/client';
+import { RENDER_MEDIA_LIMITS, buildTimelineFromStyleDNA } from '@/lib/shotstack/client';
 import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
 import { generateSoundtrack, analyseReferenceSoundtrack } from '@/lib/style-dna/soundtrack';
 import type { StyleDNA } from '@/types/edit';
@@ -42,7 +42,7 @@ const Body = z.object({
       type: z.enum(['video', 'image', 'audio']),
       url: z.string().min(1),
       label: z.string().optional(),
-    })).max(20).optional(),
+    })).max(100).optional(),
     captions: z.object({
       transcription: z.unknown(),
       style: z.enum(['tiktok-bold', 'youtube-bar', 'karaoke']),
@@ -92,8 +92,9 @@ export async function POST(request: NextRequest) {
     const sourceKey = primaryMedia?.url ?? edit.source_video_url;
     // Shotstack needs a publicly-fetchable URL; we hand it a 6h presigned URL.
     const renderableUrl = await resolveRenderableUrl(sourceKey);
+    const renderSlate = selectRenderSlate(sourceMedia);
     const renderableSourceMedia = await Promise.all(
-      sourceMedia.map(async (asset) => ({
+      renderSlate.map(async (asset) => ({
         ...asset,
         url: await resolveRenderableUrl(asset.url),
       }))
@@ -255,4 +256,18 @@ function fallbackSourceAnalysis(duration: number) {
     hasSpeech: false,
     hasMusic: false,
   };
+}
+
+function selectRenderSlate(
+  media: Array<{ type: 'video' | 'image' | 'audio'; url: string; label?: string }>
+) {
+  const primaryVideo = media.find((asset) => asset.type === 'video');
+  const rest = media.filter((asset) => asset !== primaryVideo);
+  const visuals = rest
+    .filter((asset) => asset.type === 'video' || asset.type === 'image')
+    .slice(0, RENDER_MEDIA_LIMITS.supplementalVisuals);
+  const audio = rest
+    .filter((asset) => asset.type === 'audio')
+    .slice(0, RENDER_MEDIA_LIMITS.supplementalAudio);
+  return [...(primaryVideo ? [primaryVideo] : []), ...visuals, ...audio];
 }

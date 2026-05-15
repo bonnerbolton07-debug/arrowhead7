@@ -24,6 +24,11 @@ import type { SubscriptionTier } from '@/types';
 import type { WhisperTranscription } from '@/lib/captions/whisper';
 import { buildCaptionTrack, type CaptionStyle } from '@/lib/captions/burn-in';
 
+export const RENDER_MEDIA_LIMITS = {
+  supplementalVisuals: 4,
+  supplementalAudio: 1,
+} as const;
+
 function getShotstackConfig() {
   const apiUrl = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
   const isProduction = apiUrl.includes('/v1');
@@ -261,13 +266,17 @@ function addSupplementalMedia(
   targetDuration: number
 ): ShotstackRenderConfig {
   const supplemental = media.slice(1);
-  const visualAssets = supplemental.filter((asset) => asset.type === 'image' || asset.type === 'video');
-  const audioAssets = supplemental.filter((asset) => asset.type === 'audio');
+  const visualAssets = supplemental
+    .filter((asset) => asset.type === 'image' || asset.type === 'video')
+    .slice(0, RENDER_MEDIA_LIMITS.supplementalVisuals);
+  const audioAssets = supplemental
+    .filter((asset) => asset.type === 'audio')
+    .slice(0, RENDER_MEDIA_LIMITS.supplementalAudio);
   const tracks: ShotstackTrack[] = [...config.timeline.tracks];
 
   if (visualAssets.length > 0) {
     const slotLength = Math.max(1.5, Math.min(3, targetDuration / Math.max(3, visualAssets.length + 1)));
-    const clips: ShotstackClip[] = visualAssets.slice(0, 8).map((asset, index) => {
+    const clips: ShotstackClip[] = visualAssets.map((asset, index) => {
       const start = Math.min(Math.max(0, targetDuration - slotLength), (index + 1) * (targetDuration / (visualAssets.length + 1)));
       return {
         asset: {
@@ -285,7 +294,7 @@ function addSupplementalMedia(
   }
 
   if (audioAssets.length > 0) {
-    const clips: ShotstackClip[] = audioAssets.slice(0, 3).map((asset, index) => ({
+    const clips: ShotstackClip[] = audioAssets.map((asset, index) => ({
       asset: {
         type: 'audio',
         src: asset.url,

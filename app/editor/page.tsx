@@ -1738,7 +1738,7 @@ function EditorPageInner() {
               Add Source Media
             </h2>
             <p className="text-a7-text/40 text-xs sm:text-sm mb-6 sm:mb-8 text-center px-2">
-              Add the raw clips, photos, music, SFX, and supporting assets A7 should pull into the final edit.
+              Add as many clips, photos, music, SFX, and references as you want. A7 keeps everything in the project, then selects a safe render slate for the final cut.
             </p>
 
             <button
@@ -1769,7 +1769,7 @@ function EditorPageInner() {
             <ReferenceDropZone
               onFiles={uploadSourceFiles}
               title="Drop source clips, images, music, or SFX"
-              subtitle="At least one video clip is required · supporting images/audio are pulled into the render"
+              subtitle="At least one video clip is required · A7 renders the primary video plus the strongest supporting layers"
             />
 
             {sourceAssets.length > 0 && (
@@ -1778,6 +1778,9 @@ function EditorPageInner() {
                   {sourceAssets.length} source asset{sourceAssets.length === 1 ? '' : 's'}
                   {!hasReadySourceVideo && ' · add a video to continue'}
                 </div>
+                <p className="text-xs text-a7-text/35 mb-3">
+                  Project input is unlimited. For reliability, each render uses 1 primary video, up to 4 supporting visuals, and 1 music/SFX layer. Extra media stays saved for future variations.
+                </p>
                 <div className="space-y-2">
                   {sourceAssets.map((asset, idx) => (
                     <ReferenceRow

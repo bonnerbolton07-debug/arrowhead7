@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTimelineFromStyleDNA } from './client';
+import { RENDER_MEDIA_LIMITS, buildTimelineFromStyleDNA } from './client';
 import type { WhisperTranscription } from '@/lib/captions/whisper';
 
 describe('buildTimelineFromStyleDNA', () => {
@@ -63,5 +63,23 @@ describe('buildTimelineFromStyleDNA', () => {
       tier: 'pro',
     });
     expect(config.timeline.tracks).toHaveLength(1);
+  });
+
+  it('distills unlimited project media into a bounded render slate', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      targetDuration: 30,
+      sourceMedia: [
+        { type: 'video', url: 'r2://primary.mp4' },
+        ...Array.from({ length: 20 }, (_, i) => ({ type: 'image' as const, url: `r2://image-${i}.jpg` })),
+        ...Array.from({ length: 5 }, (_, i) => ({ type: 'audio' as const, url: `r2://audio-${i}.mp3` })),
+      ],
+    });
+
+    const clips = config.timeline.tracks.flatMap((track) => track.clips);
+    const supplementalVisuals = clips.filter((clip) => clip.asset.src?.includes('image-'));
+    const supplementalAudio = clips.filter((clip) => clip.asset.src?.includes('audio-'));
+
+    expect(supplementalVisuals).toHaveLength(RENDER_MEDIA_LIMITS.supplementalVisuals);
+    expect(supplementalAudio).toHaveLength(RENDER_MEDIA_LIMITS.supplementalAudio);
   });
 });

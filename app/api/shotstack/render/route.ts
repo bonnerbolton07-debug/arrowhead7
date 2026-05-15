@@ -31,6 +31,15 @@ function videoOutputFormat(format: ShotstackOutput['format']): 'mp4' | 'webm' | 
   return format === 'webm' || format === 'gif' ? format : 'mp4';
 }
 
+function firstVideoAssetUrl(config: { timeline?: { tracks?: Array<{ clips?: Array<{ asset?: { type?: string; src?: string } }> }> } }) {
+  for (const track of config.timeline?.tracks ?? []) {
+    for (const clip of track.clips ?? []) {
+      if (clip.asset?.type === 'video' && clip.asset.src) return clip.asset.src;
+    }
+  }
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = await requireUser();
@@ -126,8 +135,10 @@ export async function POST(request: NextRequest) {
       });
 
       try {
-        if (!edit.source_video_url) throw new Error('Edit has no source_video_url for fallback render');
-        const sourceUrl = await resolveRenderableUrl(edit.source_video_url);
+        const sourceUrl = edit.source_video_url
+          ? await resolveRenderableUrl(edit.source_video_url)
+          : firstVideoAssetUrl(finalConfig);
+        if (!sourceUrl) throw new Error('Edit has no renderable video source for fallback render');
         const fallbackConfig = applyWatermarkIfRequired(
           buildTimelineFromStyleDNA(sourceUrl, null, {
             targetDuration: Math.max(
