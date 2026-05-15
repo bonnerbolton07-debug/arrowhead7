@@ -638,20 +638,30 @@ function VaultFileRow({
   onRemove: (id: string) => void;
 }) {
   const [busy, setBusy] = useState<null | 'download' | 'share'>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const downloadOrOpen = async (mode: 'download' | 'share') => {
     setBusy(mode);
+    setMessage(null);
+    setError(null);
     try {
       const res = await fetch(`/api/vault/files/${file.id}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        setError('Could not prepare this file. Try again.');
+        return;
+      }
       const data = (await res.json()) as { downloadUrl?: string };
-      if (!data.downloadUrl) return;
+      if (!data.downloadUrl) {
+        setError('No download link is available yet.');
+        return;
+      }
       if (mode === 'share') {
         try {
           await navigator.clipboard.writeText(data.downloadUrl);
-          alert('Share link copied to clipboard. Expires in 1 hour.');
+          setMessage('Share link copied. It expires in 1 hour.');
         } catch {
-          window.prompt('Share link (expires in 1h):', data.downloadUrl);
+          setError('Could not copy automatically. Open the file and copy the browser link.');
         }
       } else {
         window.open(data.downloadUrl, '_blank', 'noopener,noreferrer');
@@ -676,6 +686,14 @@ function VaultFileRow({
       >
         {file.kind === 'image' ? 'IMG' : file.kind === 'video' ? 'VID' : file.kind === 'audio' ? 'AUD' : 'FILE'}
       </span>
+      {(message || error) && (
+        <span
+          className="text-[11px] hidden sm:inline"
+          style={{ color: error ? '#E8B06A' : '#5BE8D5' }}
+        >
+          {error || message}
+        </span>
+      )}
       <div className="flex-1 min-w-0">
         <div className="text-sm text-a7-text/90 truncate">{file.filename}</div>
         <div className="text-[11px] text-a7-text/30 flex gap-3 mt-0.5">

@@ -61,6 +61,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Edit has no render config' }, { status: 400 });
     }
 
+    const { data: activeJob } = await supabase
+      .from('render_jobs')
+      .select('id, status, progress')
+      .eq('edit_id', editId)
+      .eq('user_id', user.id)
+      .in('status', ['pending', 'processing', 'uploading'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activeJob) {
+      return NextResponse.json({
+        jobId: activeJob.id,
+        status: 'processing',
+        progress: activeJob.progress ?? 0,
+        duplicate: true,
+      });
+    }
+
     // Atomically deduct credit only if balance >= 1. This avoids the
     // check-then-deduct race where two concurrent renders both pass the
     // check and both decrement, taking the balance negative.
@@ -142,8 +161,7 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json(
           {
-            error: 'Render submission failed',
-            details: fallback || primary,
+            error: 'Render submission failed. Your credit was returned. Try a shorter clip or fewer media layers.',
           },
           { status: 502 }
         );

@@ -11,6 +11,8 @@ import { uploadFromUrl } from '@/lib/cloudflare/stream';
 
 export const dynamic = 'force-dynamic';
 const STREAM_COPY_TIMEOUT_MS = 12_000;
+const RENDER_TIMEOUT_MS = Number(process.env.RENDER_TIMEOUT_MS ?? 45 * 60 * 1000);
+type SupabaseServerClient = Awaited<ReturnType<typeof createServerSupabaseClient>>;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -20,6 +22,37 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     }),
   ]).finally(() => clearTimeout(timer!));
+}
+
+async function refundRenderCreditOnce(
+  supabase: SupabaseServerClient,
+  userId: string,
+  editId: string
+) {
+  const { data: existingRefund } = await supabase
+    .from('credit_transactions')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('reason', 'refund')
+    .eq('reference_id', editId)
+    .maybeSingle();
+
+  if (existingRefund) return;
+
+  const { data: refunded } = await supabase.rpc('refund_credit', {
+    p_user_id: userId,
+    p_amount: 1,
+  });
+  const newBalance = refunded?.[0]?.credits_remaining;
+  if (typeof newBalance === 'number') {
+    await supabase.from('credit_transactions').insert({
+      user_id: userId,
+      amount: 1,
+      balance_after: newBalance,
+      reason: 'refund',
+      reference_id: editId,
+    });
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -62,8 +95,55 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    const startedAt = job.started_at ? new Date(job.started_at as string).getTime() : NaN;
+    if (Number.isFinite(startedAt) && Date.now() - startedAt > RENDER_TIMEOUT_MS) {
+      const message = 'Render timed out. Your credit has been returned. Try again with a shorter clip or fewer media layers.';
+      await supabase
+        .from('render_jobs')
+        .update({
+          status: 'failed',
+          error_message: message,
+        })
+        .eq('id', jobId);
+
+      await supabase
+        .from('edits')
+        .update({ status: 'failed' })
+        .eq('id', job.edit_id);
+
+      await refundRenderCreditOnce(supabase, user.id, job.edit_id);
+
+      return NextResponse.json({
+        status: 'failed',
+        progress: job.progress ?? 0,
+        error: message,
+      });
+    }
+
     // Poll Shotstack
-    const shotstackStatus = await getRenderStatus(job.shotstack_render_id);
+    let shotstackStatus: Awaited<ReturnType<typeof getRenderStatus>>;
+    try {
+      shotstackStatus = await getRenderStatus(job.shotstack_render_id);
+    } catch (err) {
+      console.error('[shotstack/status] provider status unavailable', {
+        jobId,
+        editId: job.edit_id,
+        error: err instanceof Error ? err.message.slice(0, 300) : 'unknown',
+      });
+      await supabase
+        .from('render_jobs')
+        .update({
+          shotstack_status: 'status_unavailable',
+          error_message: 'Renderer status is temporarily unavailable.',
+        })
+        .eq('id', jobId);
+      return NextResponse.json({
+        status: 'processing',
+        progress: job.progress ?? 0,
+        shotstackStatus: 'status_unavailable',
+        warning: 'Renderer status is temporarily unavailable. A7 is still checking and your job is safe.',
+      });
+    }
 
     // If Shotstack is done, mark the edit completed immediately with the
     // Shotstack output URL. Any secondary hosting must never block completion.
@@ -144,30 +224,7 @@ export async function GET(request: NextRequest) {
 
       // Refund the credit that was debited at submission time. Idempotent:
       // we only refund once by checking for an existing refund transaction.
-      const { data: existingRefund } = await supabase
-        .from('credit_transactions')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('reason', 'refund')
-        .eq('reference_id', job.edit_id)
-        .maybeSingle();
-
-      if (!existingRefund) {
-        const { data: refunded } = await supabase.rpc('refund_credit', {
-          p_user_id: user.id,
-          p_amount: 1,
-        });
-        const newBalance = refunded?.[0]?.credits_remaining;
-        if (typeof newBalance === 'number') {
-          await supabase.from('credit_transactions').insert({
-            user_id: user.id,
-            amount: 1,
-            balance_after: newBalance,
-            reason: 'refund',
-            reference_id: job.edit_id,
-          });
-        }
-      }
+      await refundRenderCreditOnce(supabase, user.id, job.edit_id);
 
       return NextResponse.json({
         status: 'failed',

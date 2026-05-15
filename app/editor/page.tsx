@@ -404,8 +404,11 @@ function EditorPageInner() {
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [renderNotice, setRenderNotice] = useState<string | null>(null);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
   const [exportVaultFileId, setExportVaultFileId] = useState<string | null>(null);
+  const renderPollFailures = useRef(0);
+  const activePollJobRef = useRef<string | null>(null);
 
   // Vault pickers
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
@@ -1137,8 +1140,31 @@ function EditorPageInner() {
           }
         }
 
+        const { data: latestJob } = await supabase
+          .from('render_jobs')
+          .select('id, status, progress, error_message')
+          .eq('edit_id', activeEditId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
         // Pick a starting step based on what's available
-        if (isVariantRequest && edit.style_dna_id && edit.source_video_url) {
+        if (!isVariantRequest && latestJob && ['pending', 'processing', 'uploading'].includes(latestJob.status as string)) {
+          setRenderJobId(latestJob.id as string);
+          setRenderState('processing');
+          setRenderProgress(Number(latestJob.progress ?? 0));
+          setRenderNotice('Reconnected to your active render. You can leave this tab and come back safely.');
+          setStep('render');
+        } else if (!isVariantRequest && latestJob?.status === 'failed') {
+          setRenderJobId(latestJob.id as string);
+          setRenderState('failed');
+          setRenderProgress(Number(latestJob.progress ?? 0));
+          setRenderError(
+            (latestJob.error_message as string | null) ||
+              'Render failed. Your project is saved and you can try again.'
+          );
+          setStep('render');
+        } else if (isVariantRequest && edit.style_dna_id && edit.source_video_url) {
           const startOnMedia = typeof window !== 'undefined' && window.location.hash === '#media';
           setStep(startOnMedia ? 'reference' : 'configure');
         } else if (edit.status === 'completed' && edit.output_video_url) {
@@ -1315,28 +1341,51 @@ function EditorPageInner() {
         throw new Error(body.error || `Status check failed: ${res.status}`);
       }
       const data = await res.json();
+      if (data.warning) setRenderNotice(data.warning);
+      else setRenderNotice(null);
       if (typeof data.progress === 'number') setRenderProgress(data.progress);
 
       if (data.status === 'completed') {
+        renderPollFailures.current = 0;
+        activePollJobRef.current = null;
         setRenderState('completed');
         setOutputUrl(data.playbackUrl || null);
         setExportVaultFileId(data.vaultFileId || null);
+        setRenderNotice(null);
         stopPolling();
         return;
       }
       if (data.status === 'failed') {
+        renderPollFailures.current = 0;
+        activePollJobRef.current = null;
         setRenderState('failed');
-        setRenderError(data.error || 'Render failed');
+        setRenderError(data.error || 'Render failed. Your project is saved and you can try again.');
+        setRenderNotice(null);
         stopPolling();
         return;
       }
       pollTimer.current = setTimeout(() => pollStatus(jobId), 3000);
     } catch (err) {
+      renderPollFailures.current += 1;
+      if (renderPollFailures.current <= 5) {
+        setRenderNotice('A7 is having trouble checking the renderer. Your job is still saved and will keep retrying.');
+        pollTimer.current = setTimeout(() => pollStatus(jobId), 5000);
+        return;
+      }
+      activePollJobRef.current = null;
       setRenderState('failed');
-      setRenderError(err instanceof Error ? err.message : 'Status check failed');
+      setRenderError('A7 could not confirm render status after several retries. Your project is saved; try again from this screen.');
       stopPolling();
     }
   }, [stopPolling]);
+
+  useEffect(() => {
+    if (renderState !== 'processing' || !renderJobId) return;
+    if (activePollJobRef.current === renderJobId) return;
+    activePollJobRef.current = renderJobId;
+    renderPollFailures.current = 0;
+    void pollStatus(renderJobId);
+  }, [renderState, renderJobId, pollStatus]);
 
   const buildMatch = useCallback(async (captionsPayload?: unknown): Promise<{ ok: boolean; error?: string }> => {
     if (!editId || !styleDNA) {
@@ -1440,6 +1489,7 @@ function EditorPageInner() {
     }
     setRenderState('submitting');
     setRenderError(null);
+    setRenderNotice(null);
     setRenderProgress(0);
 
     try {
@@ -1463,13 +1513,17 @@ function EditorPageInner() {
       if (!res.ok) throw new Error(data.error || `Render submit failed: ${res.status}`);
 
       setRenderJobId(data.jobId);
+      if (data.duplicate) {
+        setRenderNotice('Render was already processing. A7 reconnected instead of starting a duplicate job.');
+      } else if (data.fallback) {
+        setRenderNotice('A7 used a simplified render plan so you still get an export.');
+      }
       setRenderState('processing');
-      pollStatus(data.jobId);
     } catch (err) {
       setRenderState('failed');
-      setRenderError(err instanceof Error ? err.message : 'Render failed');
+      setRenderError(err instanceof Error ? err.message : 'Render failed. Your project is saved and you can try again.');
     }
-  }, [editId, primarySourceKey, styleDNA, buildMatch, pollStatus, autoCaptions, transcribeForCaptions]);
+  }, [editId, primarySourceKey, styleDNA, buildMatch, autoCaptions, transcribeForCaptions]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -2112,6 +2166,11 @@ function EditorPageInner() {
                 <p className="text-a7-text/30 text-xs">
                   {renderState === 'submitting' ? 'Submitting to renderer...' : `Rendering... ${renderProgress}%`}
                 </p>
+                {renderNotice && (
+                  <p className="mt-3 text-xs" style={{ color: '#E8B06A' }}>
+                    {renderNotice}
+                  </p>
+                )}
               </>
             )}
 
@@ -2239,6 +2298,7 @@ function EditorPageInner() {
                     onClick={() => {
                       setRenderState('idle');
                       setRenderError(null);
+                      setRenderNotice(null);
                       setRenderProgress(0);
                     }}
                     className="flex-1 py-3 rounded-md font-medium transition-all text-a7-void"
@@ -2286,10 +2346,14 @@ function ExportActions({
 }) {
   const [shareBusy, setShareBusy] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   const doShare = async () => {
     if (!vaultFileId && !outputUrl) return;
     setShareBusy(true);
+    setShareMessage(null);
+    setShareError(null);
     try {
       let link = outputUrl ?? '';
       if (vaultFileId) {
@@ -2302,9 +2366,9 @@ function ExportActions({
       if (!link) return;
       try {
         await navigator.clipboard.writeText(link);
-        alert('Share link copied to clipboard.');
+        setShareMessage('Share link copied. It expires automatically.');
       } catch {
-        window.prompt('Share link:', link);
+        setShareError('Could not copy automatically. Use Download to open the file, then copy the browser link.');
       }
     } finally {
       setShareBusy(false);
@@ -2333,31 +2397,38 @@ function ExportActions({
   const disabled = !outputUrl && !vaultFileId;
 
   return (
-    <div className="flex gap-3 mt-6">
-      <button
-        onClick={doDownload}
-        disabled={disabled || downloadBusy}
-        className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
-        style={{
-          background: 'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
-          border: '1px solid rgba(45,212,191,0.25)',
-          color: '#5BE8D5',
-        }}
-      >
-        {downloadBusy ? 'Preparing…' : 'Download'}
-      </button>
-      <button
-        onClick={doShare}
-        disabled={disabled || shareBusy}
-        className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
-        style={{
-          background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
-          border: '1px solid rgba(245,240,232,0.08)',
-          color: 'rgba(245,240,232,0.7)',
-        }}
-      >
-        {shareBusy ? 'Copying…' : 'Share'}
-      </button>
+    <div className="mt-6">
+      <div className="flex gap-3">
+        <button
+          onClick={doDownload}
+          disabled={disabled || downloadBusy}
+          className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
+          style={{
+            background: 'linear-gradient(135deg, rgba(45,212,191,0.1), rgba(45,212,191,0.03))',
+            border: '1px solid rgba(45,212,191,0.25)',
+            color: '#5BE8D5',
+          }}
+        >
+          {downloadBusy ? 'Preparing…' : 'Download'}
+        </button>
+        <button
+          onClick={doShare}
+          disabled={disabled || shareBusy}
+          className="flex-1 py-3 rounded-md font-medium text-sm transition-all disabled:opacity-40"
+          style={{
+            background: 'linear-gradient(135deg, rgba(245,240,232,0.04), rgba(245,240,232,0.01))',
+            border: '1px solid rgba(245,240,232,0.08)',
+            color: 'rgba(245,240,232,0.7)',
+          }}
+        >
+          {shareBusy ? 'Copying…' : 'Share'}
+        </button>
+      </div>
+      {(shareMessage || shareError) && (
+        <p className="mt-3 text-xs" style={{ color: shareError ? '#E8B06A' : '#5BE8D5' }}>
+          {shareError || shareMessage}
+        </p>
+      )}
     </div>
   );
 }
