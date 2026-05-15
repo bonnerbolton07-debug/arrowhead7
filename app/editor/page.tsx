@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Logo, LogoIcon } from '@/components/ui/Logo';
 import { getClient } from '@/lib/supabase/client';
@@ -138,7 +138,7 @@ function classNames(...parts: Array<string | false | null | undefined>) {
 
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // matches server-side cap
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
-const STYLE_DNA_CLIENT_FALLBACK_MS = 40_000;
+const STYLE_DNA_CLIENT_FALLBACK_MS = 20_000;
 
 function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind['kind'] {
   return `${scope}-${kind}` as UploadKind['kind'];
@@ -339,7 +339,14 @@ function EditorPageInner() {
   const [referenceError, setReferenceError] = useState<string | null>(null);
 
   // Derived: do we have at least one ready reference?
-  const readyRefs = references.filter((r) => r.status === 'ready');
+  const readyRefs = useMemo(
+    () => references.filter((r) => r.status === 'ready'),
+    [references]
+  );
+  const readyRefsKey = useMemo(
+    () => readyRefs.map((r) => `${r.kind}:${r.source}:${r.url}`).join('|'),
+    [readyRefs]
+  );
   const hasReadyRef = readyRefs.length > 0;
   // First soundtrack candidate: uploaded music/SFX wins, with video as fallback.
   const soundtrackR2Key =
@@ -357,7 +364,10 @@ function EditorPageInner() {
   const [footageResumeState, setFootageResumeState] = useState<UploadResumeState | null>(null);
   const [sourceAssets, setSourceAssets] = useState<ReferenceItem[]>([]);
 
-  const readySourceAssets = sourceAssets.filter((r) => r.status === 'ready');
+  const readySourceAssets = useMemo(
+    () => sourceAssets.filter((r) => r.status === 'ready'),
+    [sourceAssets]
+  );
   const primarySourceAsset = readySourceAssets.find((r) => r.kind === 'video') ?? null;
   const hasReadySourceVideo = Boolean(primarySourceAsset || footageR2Key);
 
@@ -367,6 +377,7 @@ function EditorPageInner() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analyzeStage, setAnalyzeStage] = useState<string>('');
   const [analyzeElapsed, setAnalyzeElapsed] = useState<number>(0);
+  const [analyzeRunNonce, setAnalyzeRunNonce] = useState(0);
 
   // Step 4 — Configure
   const [resolution, setResolution] = useState<Resolution>('1080');
@@ -1163,6 +1174,9 @@ function EditorPageInner() {
     if (readyRefs.length === 0) return;
 
     let cancelled = false;
+    let stageTimer: ReturnType<typeof setInterval> | null = null;
+    let fetchTimeout: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
     const startedAt = Date.now();
     setAnalyzeElapsed(0);
     const elapsedTimer = setInterval(() => {
@@ -1183,12 +1197,14 @@ function EditorPageInner() {
         'Composing Style DNA...',
       ];
       let stageIdx = 0;
-      const stageTimer = setInterval(() => {
+      stageTimer = setInterval(() => {
         stageIdx = Math.min(stageIdx + 1, stages.length - 1);
         if (!cancelled) setAnalyzeStage(stages[stageIdx]);
       }, 1500);
       const completeWithFallback = (reason: string) => {
         if (cancelled) return;
+        clearInterval(elapsedTimer);
+        if (stageTimer) clearInterval(stageTimer);
         setStyleDNA(buildClientFallbackStyleDNA(readyRefs));
         setAnalyzeStage(`Quick Style DNA ready (${reason})`);
         setAnalyzeError(null);
@@ -1199,11 +1215,10 @@ function EditorPageInner() {
         // Weight each reference equally; videos drive temporal fields, images
         // contribute to color. (See analyzer.ts blendAnalyses for details.)
         const payload = readyRefs.map((r) => ({ url: r.url, type: r.kind }));
-        const controller = new AbortController();
-        // Server has a 60s hard cap plus a 40s per-reference fallback, so 75s
-        // on the client should always outlive the server response. If we hit
-        // this timeout, something is wedged at the network layer.
-        const fetchTimeout = setTimeout(() => controller.abort(), STYLE_DNA_CLIENT_FALLBACK_MS);
+        controller = new AbortController();
+        // Style DNA must never block the editing pipeline. If deep analysis
+        // stalls, fall forward with deterministic Quick Style DNA.
+        fetchTimeout = setTimeout(() => controller?.abort(), STYLE_DNA_CLIENT_FALLBACK_MS);
         let res: Response;
         try {
           res = await fetch('/api/style-dna/analyze', {
@@ -1216,17 +1231,15 @@ function EditorPageInner() {
             keepalive: false,
           });
         } catch (fetchErr: unknown) {
-          clearTimeout(fetchTimeout);
+          if (fetchTimeout) clearTimeout(fetchTimeout);
           if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
-            clearInterval(stageTimer);
-            clearInterval(elapsedTimer);
             completeWithFallback('analysis timed out');
             return;
           }
           throw fetchErr;
         }
-        clearTimeout(fetchTimeout);
-        clearInterval(stageTimer);
+        if (fetchTimeout) clearTimeout(fetchTimeout);
+        if (stageTimer) clearInterval(stageTimer);
         clearInterval(elapsedTimer);
         if (cancelled) return;
         if (!res.ok) {
@@ -1241,7 +1254,8 @@ function EditorPageInner() {
         setAnalyzeStage('Style DNA captured');
         setAnalyzeState('done');
       } catch (err) {
-        clearInterval(stageTimer);
+        if (stageTimer) clearInterval(stageTimer);
+        if (fetchTimeout) clearTimeout(fetchTimeout);
         clearInterval(elapsedTimer);
         if (cancelled) return;
         console.warn('[editor] Style DNA analysis failed, using fallback', err);
@@ -1251,9 +1265,16 @@ function EditorPageInner() {
     void run();
     return () => {
       cancelled = true;
+      controller?.abort();
+      if (fetchTimeout) clearTimeout(fetchTimeout);
+      if (stageTimer) clearInterval(stageTimer);
       clearInterval(elapsedTimer);
     };
-  }, [step, analyzeState, readyRefs]);
+    // Do not depend on analyzeState here. This effect owns the transition from
+    // idle -> analyzing -> done; including analyzeState cancels the in-flight
+    // request immediately after it starts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, readyRefsKey, analyzeRunNonce]);
 
   // ─── Step 5: Render & poll ─────────────────────────────────────────────
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1397,6 +1418,15 @@ function EditorPageInner() {
       return null;
     }
   }, [autoCaptions, footageR2Key, captionState, captionTranscription]);
+
+  const applyQuickStyleDNA = useCallback((reason = 'manual fallback') => {
+    if (readyRefs.length === 0) return;
+    setStyleDNA(buildClientFallbackStyleDNA(readyRefs));
+    setAnalyzeStage(`Quick Style DNA ready (${reason})`);
+    setAnalyzeError(null);
+    setAnalyzeElapsed(0);
+    setAnalyzeState('done');
+  }, [readyRefs]);
 
   const startRender = useCallback(async () => {
     if (!editId || !footageR2Key) {
@@ -1773,15 +1803,31 @@ function EditorPageInner() {
                     : analyzeStage || 'Working...'}
                 </p>
                 {analyzeState === 'analyzing' && (
-                  <p className="text-a7-text/25 text-[10px] text-center mt-1">
-                    {analyzeElapsed}s elapsed · auto-falls back at 40s
-                  </p>
+                  <div className="mt-2 text-center">
+                    <p className="text-a7-text/25 text-[10px]">
+                      {analyzeElapsed}s elapsed · auto-falls forward at 20s
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => applyQuickStyleDNA('manual skip')}
+                      className="mt-3 px-4 py-2 rounded-md text-xs font-medium transition-all text-a7-void"
+                      style={{
+                        background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)',
+                        boxShadow: '0 0 14px rgba(45,212,191,0.22)',
+                      }}
+                    >
+                      Use Quick Style DNA
+                    </button>
+                  </div>
                 )}
 
                 {analyzeState === 'error' && (
                   <div className="mt-4 flex justify-center">
                     <button
-                      onClick={() => setAnalyzeState('idle')}
+                      onClick={() => {
+                        setAnalyzeState('idle');
+                        setAnalyzeRunNonce((n) => n + 1);
+                      }}
                       className="px-4 py-2 rounded-md text-sm font-medium text-a7-void"
                       style={{ background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }}
                     >
