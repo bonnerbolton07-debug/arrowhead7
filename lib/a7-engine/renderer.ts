@@ -55,6 +55,7 @@ export interface A7EngineReport {
 export interface A7EngineRenderResult {
   renderId: string;
   outputKey: string;
+  vaultFileId: string | null;
   playbackUrl: string;
   report: A7EngineReport;
 }
@@ -193,6 +194,43 @@ async function attachSoundtrack(
   outputPath: string,
   durationSeconds: number
 ) {
+  try {
+    await runFfmpeg(
+      [
+        '-hide_banner',
+        '-y',
+        '-i',
+        videoPath,
+        '-stream_loop',
+        '-1',
+        '-i',
+        audioPath,
+        '-t',
+        durationSeconds.toFixed(3),
+        '-filter_complex',
+        '[0:a:0]volume=0.75[src];[1:a:0]volume=0.55[music];[src][music]amix=inputs=2:duration=shortest:dropout_transition=2[aout]',
+        '-map',
+        '0:v:0',
+        '-map',
+        '[aout]',
+        '-c:v',
+        'copy',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        '-shortest',
+        '-movflags',
+        '+faststart',
+        outputPath,
+      ],
+      { timeoutMs: CONCAT_TIMEOUT_MS }
+    );
+    return;
+  } catch {
+    // If the stitched video has no source audio, fall back to music-only.
+  }
+
   await runFfmpeg(
     [
       '-hide_banner',
@@ -280,7 +318,10 @@ export async function renderWithA7Engine(input: {
           resolved.path,
           '-vf',
           videoFilter(geometry, plannedClip.filter),
-          '-an',
+          '-map',
+          '0:v:0',
+          '-map',
+          '0:a?',
           '-c:v',
           'libx264',
           '-preset',
@@ -289,6 +330,10 @@ export async function renderWithA7Engine(input: {
           '20',
           '-pix_fmt',
           'yuv420p',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '160k',
           '-movflags',
           '+faststart',
           segmentPath,
@@ -323,6 +368,10 @@ export async function renderWithA7Engine(input: {
         '20',
         '-pix_fmt',
         'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '160k',
         '-movflags',
         '+faststart',
         stitchedPath,
@@ -381,7 +430,7 @@ export async function renderWithA7Engine(input: {
       warnings,
     };
 
-    await registerVaultFile({
+    const vaultFile = await registerVaultFile({
       userId: input.userId,
       r2Key: outputKey,
       filename: `a7-engine-${input.editId}.mp4`,
@@ -397,6 +446,7 @@ export async function renderWithA7Engine(input: {
     return {
       renderId: `${A7_ENGINE_RENDER_ID_PREFIX}${randomUUID()}`,
       outputKey,
+      vaultFileId: vaultFile?.id ?? null,
       playbackUrl,
       report,
     };

@@ -148,6 +148,7 @@ const RENDER_AUDIO_LAYER_LIMIT = 1;
 const RENDER_STATUS_TIMEOUT_MS = 15_000;
 const RENDER_MATCH_TIMEOUT_MS = 60_000;
 const RENDER_SUBMIT_TIMEOUT_MS = 45_000;
+const A7_ENGINE_RENDER_SUBMIT_TIMEOUT_MS = 285_000;
 const CAPTION_TRANSCRIBE_TIMEOUT_MS = 60_000;
 
 function uploadKindFor(scope: 'reference' | 'source', kind: RefKind): UploadKind['kind'] {
@@ -1752,6 +1753,7 @@ function EditorPageInner() {
         detail?: string;
         reason?: string;
         jobId?: string;
+        status?: string;
         duplicate?: boolean;
         fallback?: boolean;
         providerFallback?: boolean;
@@ -1759,6 +1761,9 @@ function EditorPageInner() {
         engine?: 'a7_engine' | 'shotstack';
         engineVersion?: string;
         engineError?: string;
+        playbackUrl?: string | null;
+        vaultFileId?: string | null;
+        outputKey?: string | null;
       }>(
         '/api/shotstack/render',
         {
@@ -1769,7 +1774,9 @@ function EditorPageInner() {
             ...(requestedRenderProvider ? { provider: requestedRenderProvider } : {}),
           }),
         },
-        RENDER_SUBMIT_TIMEOUT_MS,
+        requestedRenderProvider === 'a7_engine'
+          ? A7_ENGINE_RENDER_SUBMIT_TIMEOUT_MS
+          : RENDER_SUBMIT_TIMEOUT_MS,
         'Render submission'
       );
       if (!res.ok) {
@@ -1782,6 +1789,15 @@ function EditorPageInner() {
       if (!data.jobId) throw new Error('Renderer did not return a job id. Your edit is saved; try again.');
       setRenderJobId(data.jobId);
       if (data.engine) setRenderEngine(data.engine);
+      if (data.status === 'completed') {
+        setRenderState('completed');
+        setRenderProgress(100);
+        setRenderStartedAtMs(null);
+        setOutputUrl(data.playbackUrl || null);
+        setExportVaultFileId(data.vaultFileId || null);
+        setRenderNotice(data.engine ? `Render complete with ${data.engine === 'a7_engine' ? 'A7 Engine' : 'Shotstack'}.` : null);
+        return;
+      }
       if (data.warning) {
         setRenderNotice(data.warning);
       } else if (data.duplicate) {

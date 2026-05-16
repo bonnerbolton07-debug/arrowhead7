@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getAdminClient, isAdminConfigured } from '@/lib/supabase/admin';
 import {
   buildTimelineFromStyleDNA,
   submitRender,
@@ -29,6 +30,32 @@ async function resolveRenderableUrl(value: string): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type SupabaseServerClient = Awaited<ReturnType<typeof createServerSupabaseClient>>;
+
+function mutationClient(fallback: SupabaseServerClient): SupabaseServerClient {
+  return isAdminConfigured() ? getAdminClient() as unknown as SupabaseServerClient : fallback;
+}
+
+function appendRenderEvent(
+  renderConfig: unknown,
+  event: Record<string, unknown>
+): Record<string, unknown> {
+  const base = renderConfig && typeof renderConfig === 'object'
+    ? { ...(renderConfig as Record<string, unknown>) }
+    : {};
+  const existing = Array.isArray(base.a7_render_events)
+    ? base.a7_render_events
+    : [];
+  base.a7_render_events = [
+    ...existing.slice(-19),
+    {
+      at: new Date().toISOString(),
+      ...event,
+    },
+  ];
+  return base;
 }
 
 function videoOutputFormat(format: ShotstackOutput['format']): 'mp4' | 'webm' | 'gif' {
@@ -69,6 +96,7 @@ export async function POST(request: NextRequest) {
     if (limited) return limited;
 
     const supabase = await createServerSupabaseClient();
+    const mutations = mutationClient(supabase);
     const body = await request.json();
     const { editId } = body;
     const renderProvider: RenderProvider = selectedRenderProvider({
@@ -154,7 +182,7 @@ export async function POST(request: NextRequest) {
       }
       renderConfig = buildFallbackConfig(fallbackSourceUrl);
       startedFromFallbackConfig = true;
-      const { error: persistFallbackError } = await supabase
+      const { error: persistFallbackError } = await mutations
         .from('edits')
         .update({ render_config: renderConfig, status: 'ready' })
         .eq('id', editId)
@@ -221,7 +249,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const { error: editUpdateError } = await supabase
+        const { error: editUpdateError } = await mutations
           .from('edits')
           .update({
             status: 'completed',
@@ -229,11 +257,19 @@ export async function POST(request: NextRequest) {
             output_stream_uid: null,
             output_thumbnail_url: null,
             completed_at: completedAt,
-            render_config: {
-              ...finalConfig,
+            render_config: appendRenderEvent({
+              ...(finalConfig as unknown as Record<string, unknown>),
               a7_engine_report: engineResult.report,
               a7_engine_output_key: engineResult.outputKey,
-            },
+            }, {
+              stage: 'completed',
+              provider: 'a7_engine',
+              renderId: engineResult.renderId,
+              outputKey: engineResult.outputKey,
+              vaultFileId: engineResult.vaultFileId,
+              clipsRendered: engineResult.report.clipsRendered,
+              durationSeconds: engineResult.report.durationSeconds,
+            }),
           })
           .eq('id', editId)
           .eq('user_id', user.id);
@@ -244,13 +280,14 @@ export async function POST(request: NextRequest) {
             outputKey: engineResult.outputKey,
             error: editUpdateError.message,
           });
-          await supabase
+          await mutations
             .from('render_jobs')
             .update({
               status: 'failed',
               error_message: 'A7 finished the export but could not attach it to the edit.',
             })
-            .eq('id', job.id);
+            .eq('id', job.id)
+            .eq('user_id', user.id);
           await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
           return NextResponse.json(
             {
@@ -291,6 +328,8 @@ export async function POST(request: NextRequest) {
           status: 'completed',
           progress: 100,
           playbackUrl: engineResult.playbackUrl,
+          vaultFileId: engineResult.vaultFileId,
+          outputKey: engineResult.outputKey,
           engine: 'a7_engine',
           engineVersion: RENDER_ENGINE_VERSION,
           fallback: startedFromFallbackConfig,
@@ -305,6 +344,19 @@ export async function POST(request: NextRequest) {
         a7EngineError = errorMessage(engineError);
         if (renderProvider === 'a7_engine') {
           await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
+          await mutations
+            .from('edits')
+            .update({
+              status: 'failed',
+              render_config: appendRenderEvent(finalConfig, {
+                stage: 'failed',
+                provider: 'a7_engine',
+                reason: 'a7_engine_failed',
+                error: errorMessage(engineError).slice(0, 500),
+              }),
+            })
+            .eq('id', editId)
+            .eq('user_id', user.id);
           return NextResponse.json(
             {
               error: 'A7 native render failed. Your credit was returned.',
@@ -315,6 +367,18 @@ export async function POST(request: NextRequest) {
           );
         }
         fellBackFromA7Engine = true;
+        await mutations
+          .from('edits')
+          .update({
+            render_config: appendRenderEvent(finalConfig, {
+              stage: 'fallback',
+              from: 'a7_engine',
+              to: 'shotstack',
+              error: a7EngineError?.slice(0, 500),
+            }),
+          })
+          .eq('id', editId)
+          .eq('user_id', user.id);
         console.warn('[a7-engine/render] auto provider falling back to Shotstack', {
           editId,
           error: a7EngineError?.slice(0, 500),
@@ -352,10 +416,17 @@ export async function POST(request: NextRequest) {
         );
         shotstackRenderId = await submitRender(fallbackConfig);
         usedFallbackRender = true;
-        await supabase
+        await mutations
           .from('edits')
-          .update({ render_config: fallbackConfig })
-          .eq('id', editId);
+          .update({
+            render_config: appendRenderEvent(fallbackConfig, {
+              stage: 'shotstack_minimal_fallback',
+              reason: 'primary_provider_submit_failed',
+              primaryError: errorMessage(renderError).slice(0, 500),
+            }),
+          })
+          .eq('id', editId)
+          .eq('user_id', user.id);
       } catch (fallbackError) {
         // Refund the credit if both upstream submits fail.
         await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
@@ -366,6 +437,20 @@ export async function POST(request: NextRequest) {
           primary: primary.slice(0, 1000),
           fallback: fallback.slice(0, 1000),
         });
+        await mutations
+          .from('edits')
+          .update({
+            status: 'failed',
+            render_config: appendRenderEvent(finalConfig, {
+              stage: 'failed',
+              provider: 'shotstack',
+              reason: 'provider_submit_failed',
+              primaryError: primary.slice(0, 500),
+              fallbackError: fallback.slice(0, 500),
+            }),
+          })
+          .eq('id', editId)
+          .eq('user_id', user.id);
         return NextResponse.json(
           {
             error: 'Render submission failed. Your credit was returned. A7 could not submit the media to the render provider.',
@@ -410,10 +495,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Update edit status
-    await supabase
+    const { error: renderStatusError } = await mutations
       .from('edits')
       .update({ status: 'rendering' })
-      .eq('id', editId);
+      .eq('id', editId)
+      .eq('user_id', user.id);
+    if (renderStatusError) {
+      console.error('[shotstack/render] failed to mark edit rendering', {
+        editId,
+        jobId: job.id,
+        error: renderStatusError.message,
+      });
+    }
 
     // Log credit transaction. Failure here doesn't block the response — the
     // credit has already been debited atomically — but we surface it so we
