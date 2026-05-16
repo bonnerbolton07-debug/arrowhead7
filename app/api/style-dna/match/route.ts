@@ -169,12 +169,18 @@ export async function POST(request: NextRequest) {
       const resolved = await resolveSource(sourceKey);
       try {
         const meta = await extractMetadata(resolved.path);
-        const analyzeDuration = Math.min(meta.duration || targetDuration, Math.max(targetDuration * 2, 30), 90);
+        const sourceDuration = meta.duration || targetDuration;
+        const analyzeDuration = Math.min(sourceDuration, Math.max(targetDuration * 2, 30), 90);
         const scenes = await detectScenes(resolved.path, analyzeDuration, 0.25);
         const audio = await analyzeAudio(resolved.path, meta.has_audio, analyzeDuration);
+        const segments = ensureFullSourceCoverage(
+          scenesToSegments(scenes.cuts, sourceDuration, audio.energy_curve, audio.duration_seconds),
+          sourceDuration,
+          Math.max(targetDuration, analyzeDuration)
+        );
         return {
-          totalDuration: meta.duration || targetDuration,
-          segments: scenesToSegments(scenes.cuts, meta.duration || targetDuration),
+          totalDuration: sourceDuration,
+          segments,
           audioBeats: audio.beats,
           hasSpeech: audio.has_speech,
           hasMusic: audio.has_music,
@@ -299,7 +305,12 @@ async function resolveRenderableUrl(value: string): Promise<string> {
   return getPresignedDownloadUrl(value, 6 * 3600);
 }
 
-function scenesToSegments(cuts: number[], fallbackDuration = 30) {
+function scenesToSegments(
+  cuts: number[],
+  fallbackDuration = 30,
+  energyCurve: number[] = [],
+  energyDuration = fallbackDuration
+) {
   const out = [] as Array<{
     startTime: number; endTime: number;
     qualityScore: number; motionLevel: number; energyLevel: number;
@@ -314,7 +325,7 @@ function scenesToSegments(cuts: number[], fallbackDuration = 30) {
       endTime: end,
       qualityScore: 0.65,
       motionLevel: 0.5,
-      energyLevel: 0.5,
+      energyLevel: sampleEnergyAt(energyCurve, energyDuration, (start + end) / 2),
       contentType: 'b-roll',
     });
   }
@@ -324,18 +335,65 @@ function scenesToSegments(cuts: number[], fallbackDuration = 30) {
   return out;
 }
 
+function sampleEnergyAt(curve: number[], curveDuration: number, t: number): number {
+  if (curve.length === 0 || curveDuration <= 0) return 0.5;
+  const idx = Math.min(curve.length - 1, Math.max(0, Math.floor((t / curveDuration) * curve.length)));
+  return curve[idx];
+}
+
+function ensureFullSourceCoverage(
+  detectedSegments: ReturnType<typeof scenesToSegments>,
+  sourceDuration: number,
+  analyzedDuration: number
+) {
+  const safeDuration = Math.max(2, Math.min(sourceDuration || 30, 30 * 60));
+  const out = [...detectedSegments];
+  const coverageStart = Math.max(0, analyzedDuration);
+  if (safeDuration <= coverageStart + 1) {
+    return out.length > 0 ? out : fallbackSourceAnalysis(safeDuration).segments;
+  }
+
+  // Scene detection is capped for serverless reliability, but the editor must
+  // still pull from the whole raw video. Add evenly-spaced candidate moments
+  // across the unscanned portion so long source videos do not loop the intro.
+  const targetSegments = Math.max(8, Math.min(48, Math.ceil(safeDuration / 8)));
+  const existingStarts = new Set(out.map((segment) => Math.round(segment.startTime)));
+  const step = Math.max(2, safeDuration / targetSegments);
+  for (let t = coverageStart; t < safeDuration - 0.5; t += step) {
+    const rounded = Math.round(t);
+    if (existingStarts.has(rounded)) continue;
+    const start = Number(t.toFixed(3));
+    const end = Number(Math.min(safeDuration, start + Math.min(3, step)).toFixed(3));
+    if (end - start < 0.5) continue;
+    out.push({
+      startTime: start,
+      endTime: end,
+      qualityScore: 0.6,
+      motionLevel: 0.5,
+      energyLevel: 0.55,
+      contentType: 'b-roll',
+    });
+    existingStarts.add(rounded);
+  }
+
+  return out.sort((a, b) => a.startTime - b.startTime);
+}
+
 function fallbackSourceAnalysis(duration: number) {
-  const safeDuration = Math.max(2, Math.min(duration || 30, 180));
-  const segmentLength = Math.min(3, safeDuration);
+  const safeDuration = Math.max(2, Math.min(duration || 30, 30 * 60));
+  const targetSegments = Math.max(4, Math.min(48, Math.ceil(safeDuration / 8)));
+  const segmentLength = Math.max(1.2, Math.min(3, safeDuration / targetSegments));
+  const step = safeDuration / targetSegments;
   const segments = [] as Array<{
     startTime: number; endTime: number;
     qualityScore: number; motionLevel: number; energyLevel: number;
     contentType: 'b-roll';
   }>;
-  for (let t = 0; t < safeDuration; t += segmentLength) {
+  for (let i = 0; i < targetSegments; i++) {
+    const t = i * step;
     segments.push({
-      startTime: t,
-      endTime: Math.min(safeDuration, t + segmentLength),
+      startTime: Number(t.toFixed(3)),
+      endTime: Number(Math.min(safeDuration, t + segmentLength).toFixed(3)),
       qualityScore: 0.62,
       motionLevel: 0.5,
       energyLevel: 0.55,

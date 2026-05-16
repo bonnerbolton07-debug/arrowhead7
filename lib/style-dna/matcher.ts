@@ -335,7 +335,7 @@ function buildTimelineSkeleton(dna: StyleDNA, targetDuration: number): TimelineS
         duration: dur,
         targetEnergy: arcEnergy,
         slotType: 'content',
-        preferredCutType: selectWeightedType(dna.cut_pattern.cut_types),
+        preferredCutType: selectWeightedType(dna.cut_pattern.cut_types, slots.length),
       });
       cursor += dur;
     }
@@ -361,13 +361,15 @@ function sampleHistogramDurations(cut: CutPattern, targetDuration: number): numb
   const samples: number[] = [];
   const N = 64;
   for (let i = 0; i < N; i++) {
-    const r = Math.random();
+    const r = deterministicFraction(i, cut.avg_cut_duration_ms || targetDuration * 1000);
     let cumulative = 0;
     for (let b = 0; b < centres.length; b++) {
       cumulative += hist[b];
       if (r <= cumulative) {
-        // Jitter ±25% inside the bucket so we don't end up with identical lengths
-        samples.push(centres[b] * (0.75 + Math.random() * 0.5));
+        // Deterministic jitter ±25% inside the bucket so repeated renders of
+        // the same edit do not drift, but clips also don't get identical lengths.
+        const jitter = 0.75 + deterministicFraction(i, b, targetDuration) * 0.5;
+        samples.push(centres[b] * jitter);
         break;
       }
     }
@@ -389,15 +391,25 @@ function sampleArc(arc: EnergyArc, t: number): number {
   return arc.curve[idx];
 }
 
-function selectWeightedType<T extends { type: string; weight: number }>(items: T[]): string {
+function selectWeightedType<T extends { type: string; weight: number }>(items: T[], seed = 0): string {
   if (items.length === 0) return 'hard-cut';
   const total = items.reduce((s, i) => s + i.weight, 0) || 1;
-  let r = Math.random() * total;
+  let r = deterministicFraction(seed, items.length, total) * total;
   for (const it of items) {
     r -= it.weight;
     if (r <= 0) return it.type;
   }
   return items[0].type;
+}
+
+function deterministicFraction(...parts: Array<number | string>): number {
+  const input = parts.join(':');
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
 }
 
 // ─── Segment assignment ─────────────────────────────────────────────────────
@@ -425,10 +437,13 @@ function assignSegmentsToTimeline(
       .filter(({ seg }) => seg.endTime - seg.startTime >= slot.duration * 0.6)
       .map(({ i }) => i);
     const candidates = fitIndexes.length > 0 ? fitIndexes : segments.map((_, i) => i);
-    const minReuse = Math.min(...candidates.map((i) => used.get(i) || 0));
+    const candidateReuseCounts = candidates.map((i) => used.get(i) || 0);
+    const minReuse = Math.min(...candidateReuseCounts);
+    const unusedCandidates = candidates.filter((i) => (used.get(i) || 0) === 0);
+    const pool = unusedCandidates.length > 0 ? unusedCandidates : candidates;
     const slotProgress = slots.length > 1 ? out.length / (slots.length - 1) : 0;
     for (let i = 0; i < segments.length; i++) {
-      if (!candidates.includes(i)) continue;
+      if (!pool.includes(i)) continue;
       const seg = segments[i];
       const reuseCount = used.get(i) || 0;
       if (segments.length > 1 && reuseCount > minReuse) continue;
@@ -444,7 +459,14 @@ function assignSegmentsToTimeline(
       // Color profile alignment: prefer brighter segments at high-energy slots,
       // darker ones at breathing slots. We don't have per-segment color here,
       // but slot energy already encodes the proxy.
-      const score = energyMatch * 0.42 + quality * 0.25 + chronology * 0.25 + slotPref + repeatPenalty;
+      const wholeSourceCoverage = 1 - Math.abs(segmentProgress - slotProgress);
+      const score =
+        energyMatch * 0.35 +
+        quality * 0.2 +
+        chronology * 0.25 +
+        wholeSourceCoverage * 0.15 +
+        slotPref +
+        repeatPenalty;
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;
@@ -547,7 +569,7 @@ function selectTransition(
     return { type: p.type, weight: w };
   });
   const total = adjusted.reduce((s, p) => s + p.weight, 0) || 1;
-  let r = Math.random() * total;
+  let r = deterministicFraction(index, totalClips, energy.toFixed(3), slot.slotType) * total;
   for (const p of adjusted) {
     r -= p.weight;
     if (r <= 0) return mapTransitionType(p.type);

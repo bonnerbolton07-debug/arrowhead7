@@ -192,6 +192,70 @@ describe('buildRenderConfig creative layers', () => {
     }
   });
 
+  it('pulls moments from across long source footage instead of only the intro', () => {
+    const dna = makeStyleDNA({
+      cut_pattern: {
+        ...makeStyleDNA().cut_pattern,
+        avg_cut_duration_ms: 1200,
+        duration_histogram: [0, 0.65, 0.3, 0.05, 0, 0, 0],
+      },
+      energy_arc: {
+        shape: 'build',
+        curve: [0.4, 0.5, 0.6, 0.7, 0.8],
+        has_cold_open: false,
+        climax_position: 0.8,
+      },
+    });
+    const longSource: SourceAnalysis = {
+      totalDuration: 180,
+      audioBeats: [],
+      hasSpeech: false,
+      hasMusic: true,
+      segments: Array.from({ length: 18 }, (_, i) => ({
+        startTime: i * 10,
+        endTime: i * 10 + 4,
+        qualityScore: 0.75,
+        motionLevel: 0.5,
+        energyLevel: 0.45 + (i / 17) * 0.4,
+        contentType: 'b-roll' as const,
+      })),
+    };
+
+    const config = buildRenderConfig(dna, longSource, {
+      targetDuration: 24,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    const trims = config.timeline.tracks[0].clips.map((clip) => Number(clip.asset.trim));
+    expect(Math.max(...trims)).toBeGreaterThan(90);
+    expect(new Set(trims).size).toBeGreaterThan(8);
+  });
+
+  it('returns deterministic render plans for the same source and DNA', () => {
+    const dna = makeStyleDNA({
+      transition_preferences: [
+        { type: 'cut', weight: 0.4 },
+        { type: 'dissolve', weight: 0.3 },
+        { type: 'whip', weight: 0.3 },
+      ],
+      cut_pattern: {
+        ...makeStyleDNA().cut_pattern,
+        duration_histogram: [0.05, 0.35, 0.35, 0.2, 0.05, 0, 0],
+      },
+    });
+
+    const first = buildRenderConfig(dna, source, {
+      targetDuration: 8,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+    const second = buildRenderConfig(dna, source, {
+      targetDuration: 8,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    expect(second.timeline.tracks[0].clips).toEqual(first.timeline.tracks[0].clips);
+  });
+
   it('applies deterministic motion effects when zoom punches are present', () => {
     const dna = makeStyleDNA({
       motion_profile: {
