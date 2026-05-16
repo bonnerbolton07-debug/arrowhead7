@@ -16,6 +16,7 @@ import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
 import { rateLimitResponse } from '@/lib/rate-limit';
 import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
 import { renderWithA7Engine } from '@/lib/a7-engine/renderer';
+import { RENDER_ENGINE_VERSION, selectedRenderProvider, type RenderProvider } from '@/lib/render/provider';
 import type { ShotstackOutput } from '@/types/edit';
 
 export const dynamic = 'force-dynamic';
@@ -28,16 +29,6 @@ async function resolveRenderableUrl(value: string): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-type RenderProvider = 'auto' | 'a7_engine' | 'shotstack';
-
-function selectedRenderProvider(body: { provider?: unknown }): RenderProvider {
-  const candidate = String(process.env.A7_RENDER_PROVIDER ?? body.provider ?? 'auto').toLowerCase();
-  if (candidate === 'a7_engine' || candidate === 'shotstack' || candidate === 'auto') {
-    return candidate;
-  }
-  return 'auto';
 }
 
 function videoOutputFormat(format: ShotstackOutput['format']): 'mp4' | 'webm' | 'gif' {
@@ -80,7 +71,10 @@ export async function POST(request: NextRequest) {
     const supabase = await createServerSupabaseClient();
     const body = await request.json();
     const { editId } = body;
-    const renderProvider = selectedRenderProvider(body);
+    const renderProvider: RenderProvider = selectedRenderProvider({
+      envProvider: process.env.A7_RENDER_PROVIDER,
+      requestProvider: body.provider,
+    });
 
     if (!editId) {
       return NextResponse.json({ error: 'Missing editId' }, { status: 400 });
@@ -183,6 +177,9 @@ export async function POST(request: NextRequest) {
       fallbackConfig: startedFromFallbackConfig,
       summary: summarizeShotstackConfig(finalConfig),
     });
+
+    let fellBackFromA7Engine = false;
+    let a7EngineError: string | null = null;
 
     if (renderProvider !== 'shotstack') {
       try {
@@ -295,6 +292,7 @@ export async function POST(request: NextRequest) {
           progress: 100,
           playbackUrl: engineResult.playbackUrl,
           engine: 'a7_engine',
+          engineVersion: RENDER_ENGINE_VERSION,
           fallback: startedFromFallbackConfig,
           report: engineResult.report,
         });
@@ -304,6 +302,7 @@ export async function POST(request: NextRequest) {
           provider: renderProvider,
           error: errorMessage(engineError).slice(0, 1000),
         });
+        a7EngineError = errorMessage(engineError);
         if (renderProvider === 'a7_engine') {
           await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
           return NextResponse.json(
@@ -315,6 +314,11 @@ export async function POST(request: NextRequest) {
             { status: 502 }
           );
         }
+        fellBackFromA7Engine = true;
+        console.warn('[a7-engine/render] auto provider falling back to Shotstack', {
+          editId,
+          error: a7EngineError?.slice(0, 500),
+        });
       }
     }
 
@@ -435,13 +439,21 @@ export async function POST(request: NextRequest) {
       editId,
       jobId: job.id,
       fallback: usedFallbackRender || startedFromFallbackConfig,
+      providerFallback: fellBackFromA7Engine,
     });
 
     return NextResponse.json({
       jobId: job.id,
       shotstackRenderId,
       status: 'processing',
+      engine: 'shotstack',
+      engineVersion: 'shotstack',
       fallback: usedFallbackRender || startedFromFallbackConfig,
+      providerFallback: fellBackFromA7Engine,
+      warning: fellBackFromA7Engine
+        ? 'A7 Engine failed in auto mode, so Shotstack fallback took over. Founder test should inspect the native engine error.'
+        : undefined,
+      engineError: fellBackFromA7Engine ? a7EngineError?.slice(0, 240) : undefined,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {

@@ -391,6 +391,12 @@ function EditorPageInner() {
   const strategyBrief = useStrategyBrief();
   const searchParams = useSearchParams();
   const resumeId = searchParams?.get('id') ?? null;
+  const requestedRenderProvider = useMemo(() => {
+    const provider = searchParams?.get('renderProvider')?.toLowerCase();
+    return provider === 'a7_engine' || provider === 'shotstack' || provider === 'auto'
+      ? provider
+      : null;
+  }, [searchParams]);
   const isVariantRequest = searchParams?.get('variant') === '1';
   const [step, setStep] = useState<Step>('reference');
   const [resumeState, setResumeState] = useState<'idle' | 'loading' | 'done' | 'error'>(
@@ -476,6 +482,7 @@ function EditorPageInner() {
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [renderNotice, setRenderNotice] = useState<string | null>(null);
+  const [renderEngine, setRenderEngine] = useState<'a7_engine' | 'shotstack' | null>(null);
   const [renderStartedAtMs, setRenderStartedAtMs] = useState<number | null>(null);
   const [renderElapsedSec, setRenderElapsedSec] = useState(0);
   const [outputUrl, setOutputUrl] = useState<string | null>(null);
@@ -1501,6 +1508,8 @@ function EditorPageInner() {
         playbackUrl?: string | null;
         vaultFileId?: string | null;
         warning?: string;
+        engine?: 'a7_engine' | 'shotstack';
+        engineVersion?: string;
       }>(
         `/api/shotstack/status?jobId=${encodeURIComponent(jobId)}`,
         { cache: 'no-store' },
@@ -1511,7 +1520,8 @@ function EditorPageInner() {
         throw new Error(data.error || `Status check failed: ${res.status}`);
       }
       if (data.warning) setRenderNotice(data.warning);
-      else setRenderNotice(null);
+      else setRenderNotice(data.engine ? `Render engine: ${data.engine === 'a7_engine' ? 'A7 Engine' : 'Shotstack'}.` : null);
+      if (data.engine) setRenderEngine(data.engine);
       if (typeof data.progress === 'number') setRenderProgress(data.progress);
 
       if (data.status === 'completed') {
@@ -1521,7 +1531,7 @@ function EditorPageInner() {
         setRenderStartedAtMs(null);
         setOutputUrl(data.playbackUrl || null);
         setExportVaultFileId(data.vaultFileId || null);
-        setRenderNotice(null);
+        setRenderNotice(data.engine ? `Render complete with ${data.engine === 'a7_engine' ? 'A7 Engine' : 'Shotstack'}.` : null);
         stopPolling();
         return;
       }
@@ -1698,7 +1708,12 @@ function EditorPageInner() {
     }
     setRenderState('submitting');
     setRenderError(null);
-    setRenderNotice('Checking render setup...');
+    setRenderEngine(null);
+    setRenderNotice(
+      requestedRenderProvider === 'a7_engine'
+        ? 'Founder test mode: forcing A7 Engine. No silent Shotstack fallback.'
+        : 'Checking render setup...'
+    );
     setRenderProgress(0);
     setRenderStartedAtMs(Date.now());
     setRenderElapsedSec(0);
@@ -1739,12 +1754,20 @@ function EditorPageInner() {
         jobId?: string;
         duplicate?: boolean;
         fallback?: boolean;
+        providerFallback?: boolean;
+        warning?: string;
+        engine?: 'a7_engine' | 'shotstack';
+        engineVersion?: string;
+        engineError?: string;
       }>(
         '/api/shotstack/render',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ editId: activeEditId }),
+          body: JSON.stringify({
+            editId: activeEditId,
+            ...(requestedRenderProvider ? { provider: requestedRenderProvider } : {}),
+          }),
         },
         RENDER_SUBMIT_TIMEOUT_MS,
         'Render submission'
@@ -1758,7 +1781,10 @@ function EditorPageInner() {
 
       if (!data.jobId) throw new Error('Renderer did not return a job id. Your edit is saved; try again.');
       setRenderJobId(data.jobId);
-      if (data.duplicate) {
+      if (data.engine) setRenderEngine(data.engine);
+      if (data.warning) {
+        setRenderNotice(data.warning);
+      } else if (data.duplicate) {
         setRenderNotice('Render was already processing. A7 reconnected instead of starting a duplicate job.');
       } else if (data.fallback) {
         setRenderNotice('A7 used a simplified render plan so you still get an export.');
@@ -1769,7 +1795,7 @@ function EditorPageInner() {
       setRenderStartedAtMs(null);
       setRenderError(err instanceof Error ? err.message : 'Render failed. Your project is saved and you can try again.');
     }
-  }, [primarySourceKey, ensureDraftEditId, styleDNA, readyRefs, autoCaptions, transcribeForCaptions, buildMatch]);
+  }, [primarySourceKey, ensureDraftEditId, styleDNA, readyRefs, autoCaptions, transcribeForCaptions, buildMatch, requestedRenderProvider]);
 
   // ─── UI helpers ────────────────────────────────────────────────────────
   const canAdvance = (() => {
@@ -2432,6 +2458,11 @@ function EditorPageInner() {
                 <h2 className="text-xl font-bold mb-2 text-a7-text">Rendering</h2>
                 <p className="text-a7-text/40 text-sm mb-8">
                   Cloud rendering in progress.
+                  {renderEngine && (
+                    <span className="block mt-1" style={{ color: renderEngine === 'a7_engine' ? '#5BE8D5' : '#E8B06A' }}>
+                      Engine: {renderEngine === 'a7_engine' ? 'A7 Engine' : 'Shotstack fallback'}
+                    </span>
+                  )}
                 </p>
                 <div
                   className="w-full rounded-full h-2 mb-4"
@@ -2488,6 +2519,11 @@ function EditorPageInner() {
                 <h2 className="text-xl font-bold mb-2 text-a7-text">Edit Complete</h2>
                 <p className="text-a7-text/40 text-sm mb-6">
                   Your video is ready.
+                  {renderEngine && (
+                    <span className="block mt-1" style={{ color: renderEngine === 'a7_engine' ? '#5BE8D5' : '#E8B06A' }}>
+                      Engine: {renderEngine === 'a7_engine' ? 'A7 Engine' : 'Shotstack fallback'}
+                    </span>
+                  )}
                 </p>
                 <PostRenderPlan
                   preferredPlatform={strategyBrief?.platform as StrategyPlatform | undefined}

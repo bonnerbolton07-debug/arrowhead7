@@ -9,6 +9,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { getRenderStatus } from '@/lib/shotstack/client';
 import { uploadFromUrl } from '@/lib/cloudflare/stream';
 import { A7_ENGINE_RENDER_ID_PREFIX } from '@/lib/a7-engine/renderer';
+import { engineForProviderRenderId, RENDER_ENGINE_VERSION } from '@/lib/render/provider';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -87,6 +88,7 @@ export async function GET(request: NextRequest) {
         .eq('id', job.edit_id)
         .eq('user_id', user.id)
         .maybeSingle();
+      const engineInfo = engineForProviderRenderId(job.shotstack_render_id);
       return NextResponse.json({
         status: job.status,
         progress: job.progress,
@@ -94,6 +96,8 @@ export async function GET(request: NextRequest) {
         playbackUrl: edit?.output_video_url ?? null,
         thumbnailUrl: edit?.output_thumbnail_url ?? null,
         streamUid: edit?.output_stream_uid ?? null,
+        engine: engineInfo.engine,
+        engineVersion: engineInfo.engineVersion,
       });
     }
 
@@ -127,7 +131,8 @@ export async function GET(request: NextRequest) {
         status: job.status,
         progress: job.progress ?? 0,
         engine: 'a7_engine',
-        warning: 'A7 native render is still being finalized. Your job is safe.',
+        engineVersion: RENDER_ENGINE_VERSION,
+        warning: 'A7 native render completed with the A7 Engine.',
       });
     }
 
