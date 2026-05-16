@@ -434,6 +434,10 @@ function EditorPageInner() {
     () => sourceAssets.filter((r) => r.status === 'ready'),
     [sourceAssets]
   );
+  const userAudioR2Key =
+    readySourceAssets.find((r) => r.kind === 'audio' && r.status === 'ready')?.url
+    ?? readyRefs.find((r) => r.kind === 'audio' && r.status === 'ready')?.url
+    ?? null;
   const sourceCounts = useMemo(() => countByKind(sourceAssets), [sourceAssets]);
   const primarySourceAsset = readySourceAssets.find((r) => r.kind === 'video') ?? null;
   const primarySourceKey = footageR2Key ?? primarySourceAsset?.url ?? null;
@@ -1615,6 +1619,7 @@ function EditorPageInner() {
               editPrompt: editPrompt.trim() || undefined,
               generateSoundtrack,
               referenceSoundtrackKey: generateSoundtrack && soundtrackR2Key ? soundtrackR2Key : undefined,
+              userAudioKey: userAudioR2Key || undefined,
               sourceMedia: readySourceAssets.map((asset) => ({
                 type: asset.kind,
                 url: asset.url,
@@ -1638,7 +1643,7 @@ function EditorPageInner() {
       setMatchState('error');
       return { ok: false, error: msg };
     }
-  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, editPrompt, generateSoundtrack, soundtrackR2Key, readySourceAssets, captionStyle]);
+  }, [editId, styleDNA, targetDuration, platform, format, resolution, hookText, ctaText, editPrompt, generateSoundtrack, soundtrackR2Key, userAudioR2Key, readySourceAssets, captionStyle]);
 
   const transcribeForCaptions = useCallback(async (): Promise<unknown | null> => {
     if (!autoCaptions || !primarySourceKey || /^https?:\/\//i.test(primarySourceKey)) return null;
@@ -1888,6 +1893,9 @@ function EditorPageInner() {
               ]}
               note={`A7 saves the full reference set, then deeply analyzes the first ${MAX_DEEP_STYLE_REFERENCES} for Style DNA so the pipeline stays reliable.`}
             />
+            <p className="mb-4 text-xs text-a7-text/40 text-center px-2">
+              Direct uploads get full frame, color, motion, and audio analysis. Social links are saved as taste references; upload the actual clip when you want A7 to match color grade, video FX, and soundtrack feel.
+            </p>
 
             <button
               type="button"
@@ -2314,7 +2322,7 @@ function EditorPageInner() {
                 </span>
               </label>
               <p className="mt-2 text-[11px] text-a7-text/30">
-                Routed through Mubert / SOUNDRAW when configured. Zero copyright risk.
+                Uploaded music or SFX are used as the audio bed by default. Turn this on to generate an original track through Mubert / SOUNDRAW when configured.
               </p>
             </FieldGroup>
 

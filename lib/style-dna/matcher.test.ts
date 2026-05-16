@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyStyleDNA, compareStyleDNA, syncToBeats } from './matcher';
+import { applyStyleDNA, buildRenderConfig, compareStyleDNA, syncToBeats } from './matcher';
+import type { SourceAnalysis } from './matcher';
 import type { ShotstackClip, StyleDNA } from '@/types/edit';
 
 function makeStyleDNA(overrides: Partial<StyleDNA> = {}): StyleDNA {
@@ -111,6 +112,63 @@ describe.skip('applyStyleDNA', () => {
     const mainTrack = config.timeline.tracks[0];
     // 60 cuts per minute over 10 seconds ~ 10 clips.
     expect(mainTrack.clips.length).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe('buildRenderConfig creative layers', () => {
+  const source: SourceAnalysis = {
+    totalDuration: 20,
+    audioBeats: [],
+    hasSpeech: false,
+    hasMusic: true,
+    segments: [
+      { startTime: 0, endTime: 4, qualityScore: 0.8, motionLevel: 0.5, energyLevel: 0.7, contentType: 'b-roll' },
+      { startTime: 4, endTime: 8, qualityScore: 0.8, motionLevel: 0.5, energyLevel: 0.6, contentType: 'b-roll' },
+      { startTime: 8, endTime: 12, qualityScore: 0.8, motionLevel: 0.5, energyLevel: 0.5, contentType: 'b-roll' },
+      { startTime: 12, endTime: 16, qualityScore: 0.8, motionLevel: 0.5, energyLevel: 0.8, contentType: 'b-roll' },
+    ],
+  };
+
+  it('applies visible color treatment for normal Style DNA lifts', () => {
+    const dna = makeStyleDNA({
+      color_profile: {
+        temperature: 0,
+        saturation: 105,
+        contrast: 112,
+        brightness: 100,
+      },
+    });
+
+    const config = buildRenderConfig(dna, source, {
+      targetDuration: 8,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    const clips = config.timeline.tracks[0].clips;
+    expect(clips.length).toBeGreaterThan(0);
+    expect(clips.every((clip) => clip.filter === 'contrast')).toBe(true);
+  });
+
+  it('applies deterministic motion effects when zoom punches are present', () => {
+    const dna = makeStyleDNA({
+      motion_profile: {
+        uses_speed_ramps: false,
+        speed_ramp_style: 'smooth',
+        uses_zoom_punches: true,
+        zoom_punch_frequency: 2,
+        uses_shake: false,
+        uses_parallax: false,
+        dominant_movement: 'mixed',
+      },
+    });
+
+    const config = buildRenderConfig(dna, source, {
+      targetDuration: 8,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    const effects = config.timeline.tracks[0].clips.map((clip) => clip.effect).filter(Boolean);
+    expect(effects.length).toBeGreaterThanOrEqual(1);
   });
 });
 

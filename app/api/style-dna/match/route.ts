@@ -38,6 +38,7 @@ const Body = z.object({
     editPrompt: z.string().max(500).optional(),
     generateSoundtrack: z.boolean().optional(),
     referenceSoundtrackKey: z.string().optional(),
+    userAudioKey: z.string().optional(),
     sourceMedia: z.array(z.object({
       type: z.enum(['video', 'image', 'audio']),
       url: z.string().min(1),
@@ -212,6 +213,22 @@ export async function POST(request: NextRequest) {
         }
       } catch (err) {
         console.warn('[style-dna/match] Soundtrack fallback: rendering without generated audio', err instanceof Error ? err.message : err);
+      }
+    }
+    if (!soundtrack) {
+      const userAudioKey = options?.userAudioKey
+        ?? sourceMedia.find((asset) => asset.type === 'audio')?.url;
+      if (userAudioKey) {
+        try {
+          soundtrack = {
+            url: await resolveRenderableUrl(userAudioKey),
+            duration: targetDuration,
+            beats: [],
+            provider: 'user-upload',
+          };
+        } catch (err) {
+          console.warn('[style-dna/match] User audio fallback: rendering without uploaded audio', err instanceof Error ? err.message : err);
+        }
       }
     }
 

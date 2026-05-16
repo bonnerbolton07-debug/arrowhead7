@@ -43,7 +43,8 @@ export function looksLikeUrl(value: string): boolean {
 }
 
 export function looksLikeR2Key(value: string): boolean {
-  return /^(sources|processing|references)\//.test(value);
+  return /^(sources|processing|references)\//.test(value)
+    || /^users\/[^/]+\/vault\/(references|footage|exports)\//.test(value);
 }
 
 /** Best-effort: infer the file extension from an R2 key or URL path. */

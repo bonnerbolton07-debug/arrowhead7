@@ -559,11 +559,14 @@ function mapTransitionType(type: TransitionPreference['type']): string | null {
 function mapColorProfileToFilter(profile: ColorProfile): string | null {
   // Shotstack's built-in filters are coarse. Pick the closest match; in the
   // future we'll render a LUT via FFmpeg and apply post-render.
-  if (profile.contrast >= 130) return 'contrast';
-  if (profile.brightness <= 80) return 'darken';
-  if (profile.brightness >= 130) return 'lighten';
-  if (profile.saturation <= 60) return 'greyscale';
-  if (profile.saturation >= 130) return 'boost';
+  const contrastLift = profile.contrast - 100;
+  const saturationLift = profile.saturation - 100;
+  const brightnessLift = profile.brightness - 100;
+  if (profile.saturation <= 82) return 'greyscale';
+  if (brightnessLift <= -12) return 'darken';
+  if (brightnessLift >= 12) return 'lighten';
+  if (contrastLift >= 8) return 'contrast';
+  if (saturationLift >= 5) return 'boost';
   return null;
 }
 
@@ -572,13 +575,17 @@ function mapColorProfileToFilter(profile: ColorProfile): string | null {
 function applyMotionEffects(clips: ShotstackClip[], motion?: MotionProfile): ShotstackClip[] {
   if (!motion) return clips;
   // Shotstack supports "zoomIn", "zoomOut", "slideLeft", etc. as effects on
-  // individual clips. We use zoomIn as a stand-in for zoom-punches: applied to
-  // a subset of clips proportional to motion.zoom_punch_frequency.
+  // individual clips. Apply a deterministic pattern so every render carries the
+  // same Style DNA instead of sometimes missing the motion layer by chance.
   if (!motion.uses_zoom_punches || motion.zoom_punch_frequency <= 0) return clips;
-  const ratio = Math.min(0.5, motion.zoom_punch_frequency / Math.max(1, clips.length));
+  const effectCount = Math.max(
+    1,
+    Math.min(clips.length - 1, Math.round(motion.zoom_punch_frequency))
+  );
+  const interval = Math.max(1, Math.floor((clips.length - 1) / effectCount));
   return clips.map((clip, i) => {
-    if (Math.random() < ratio && i > 0) {
-      return { ...clip, effect: 'zoomIn' };
+    if (i > 0 && i % interval === 0) {
+      return { ...clip, effect: i % (interval * 2) === 0 ? 'zoomOut' : 'zoomIn' };
     }
     return clip;
   });
