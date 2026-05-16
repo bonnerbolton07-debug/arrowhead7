@@ -15,6 +15,7 @@ import {
 import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
 import { rateLimitResponse } from '@/lib/rate-limit';
 import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import { renderWithA7Engine } from '@/lib/a7-engine/renderer';
 import type { ShotstackOutput } from '@/types/edit';
 
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,16 @@ async function resolveRenderableUrl(value: string): Promise<string> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type RenderProvider = 'auto' | 'a7_engine' | 'shotstack';
+
+function selectedRenderProvider(body: { provider?: unknown }): RenderProvider {
+  const candidate = String(process.env.A7_RENDER_PROVIDER ?? body.provider ?? 'auto').toLowerCase();
+  if (candidate === 'a7_engine' || candidate === 'shotstack' || candidate === 'auto') {
+    return candidate;
+  }
+  return 'auto';
 }
 
 function videoOutputFormat(format: ShotstackOutput['format']): 'mp4' | 'webm' | 'gif' {
@@ -67,7 +78,9 @@ export async function POST(request: NextRequest) {
     if (limited) return limited;
 
     const supabase = await createServerSupabaseClient();
-    const { editId } = await request.json();
+    const body = await request.json();
+    const { editId } = body;
+    const renderProvider = selectedRenderProvider(body);
 
     if (!editId) {
       return NextResponse.json({ error: 'Missing editId' }, { status: 400 });
@@ -166,9 +179,144 @@ export async function POST(request: NextRequest) {
     );
     console.info('[shotstack/render] submitting render', {
       editId,
+      provider: renderProvider,
       fallbackConfig: startedFromFallbackConfig,
       summary: summarizeShotstackConfig(finalConfig),
     });
+
+    if (renderProvider !== 'shotstack') {
+      try {
+        const engineResult = await renderWithA7Engine({
+          userId: user.id,
+          editId,
+          config: finalConfig,
+        });
+        const completedAt = new Date().toISOString();
+
+        const { data: job, error: jobError } = await supabase
+          .from('render_jobs')
+          .insert({
+            edit_id: editId,
+            user_id: user.id,
+            shotstack_render_id: engineResult.renderId,
+            shotstack_status: 'done',
+            status: 'completed',
+            progress: 100,
+            started_at: completedAt,
+            completed_at: completedAt,
+          })
+          .select()
+          .single();
+
+        if (jobError) {
+          console.error('[a7-engine/render] completed export but failed to create job row', {
+            editId,
+            outputKey: engineResult.outputKey,
+            error: jobError.message,
+          });
+          await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
+          return NextResponse.json(
+            {
+              error: 'A7 finished the export but could not save the render job. Your credit was returned.',
+              reason: 'a7_engine_job_save_failed',
+            },
+            { status: 500 }
+          );
+        }
+
+        const { error: editUpdateError } = await supabase
+          .from('edits')
+          .update({
+            status: 'completed',
+            output_video_url: engineResult.playbackUrl,
+            output_stream_uid: null,
+            output_thumbnail_url: null,
+            completed_at: completedAt,
+            render_config: {
+              ...finalConfig,
+              a7_engine_report: engineResult.report,
+              a7_engine_output_key: engineResult.outputKey,
+            },
+          })
+          .eq('id', editId)
+          .eq('user_id', user.id);
+        if (editUpdateError) {
+          console.error('[a7-engine/render] completed export but failed to update edit row', {
+            editId,
+            jobId: job.id,
+            outputKey: engineResult.outputKey,
+            error: editUpdateError.message,
+          });
+          await supabase
+            .from('render_jobs')
+            .update({
+              status: 'failed',
+              error_message: 'A7 finished the export but could not attach it to the edit.',
+            })
+            .eq('id', job.id);
+          await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
+          return NextResponse.json(
+            {
+              error: 'A7 finished the export but could not attach it to the edit. Your credit was returned.',
+              reason: 'a7_engine_edit_save_failed',
+            },
+            { status: 500 }
+          );
+        }
+
+        const { error: txError } = await supabase.from('credit_transactions').insert({
+          user_id: user.id,
+          amount: -1,
+          balance_after: newBalance,
+          reason: 'render',
+          reference_id: editId,
+        });
+        if (txError) {
+          console.error('[a7-engine/render] credit_transactions insert failed', {
+            userId: user.id,
+            amount: -1,
+            balanceAfter: newBalance,
+            editId,
+            error: txError.message,
+          });
+        }
+
+        console.info('[a7-engine/render] render job completed', {
+          editId,
+          jobId: job.id,
+          clipsRendered: engineResult.report.clipsRendered,
+          durationSeconds: engineResult.report.durationSeconds,
+        });
+
+        return NextResponse.json({
+          jobId: job.id,
+          renderId: engineResult.renderId,
+          status: 'completed',
+          progress: 100,
+          playbackUrl: engineResult.playbackUrl,
+          engine: 'a7_engine',
+          fallback: startedFromFallbackConfig,
+          report: engineResult.report,
+        });
+      } catch (engineError) {
+        console.error('[a7-engine/render] native render failed', {
+          editId,
+          provider: renderProvider,
+          error: errorMessage(engineError).slice(0, 1000),
+        });
+        if (renderProvider === 'a7_engine') {
+          await supabase.rpc('refund_credit', { p_user_id: user.id, p_amount: 1 });
+          return NextResponse.json(
+            {
+              error: 'A7 native render failed. Your credit was returned.',
+              reason: 'a7_engine_failed',
+              detail: errorMessage(engineError).slice(0, 240),
+            },
+            { status: 502 }
+          );
+        }
+      }
+    }
 
     // Submit to Shotstack. If the rich Style DNA timeline is rejected upstream,
     // fall back to a minimal source-video render so the creator still gets an
