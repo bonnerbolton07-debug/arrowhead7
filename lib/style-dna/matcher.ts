@@ -415,17 +415,28 @@ function assignSegmentsToTimeline(
   if (segments.length === 0) return [];
   const used = new Map<number, number>(); // segment index -> times used
   const out: AssignedSegment[] = [];
+  let lastIdx = -1;
 
   for (const slot of slots) {
     let bestIdx = -1;
     let bestScore = -Infinity;
+    const fitIndexes = segments
+      .map((seg, i) => ({ seg, i }))
+      .filter(({ seg }) => seg.endTime - seg.startTime >= slot.duration * 0.6)
+      .map(({ i }) => i);
+    const candidates = fitIndexes.length > 0 ? fitIndexes : segments.map((_, i) => i);
+    const minReuse = Math.min(...candidates.map((i) => used.get(i) || 0));
+    const slotProgress = slots.length > 1 ? out.length / (slots.length - 1) : 0;
     for (let i = 0; i < segments.length; i++) {
+      if (!candidates.includes(i)) continue;
       const seg = segments[i];
-      if (seg.endTime - seg.startTime < slot.duration * 0.6) continue; // too short
       const reuseCount = used.get(i) || 0;
+      if (segments.length > 1 && reuseCount > minReuse) continue;
       const energyMatch = 1 - Math.abs(seg.energyLevel - slot.targetEnergy);
       const quality = seg.qualityScore;
-      const variety = 1 / (1 + reuseCount);
+      const segmentProgress = segments.length > 1 ? i / (segments.length - 1) : 0;
+      const chronology = 1 - Math.abs(segmentProgress - slotProgress);
+      const repeatPenalty = i === lastIdx && segments.length > 1 ? -0.7 : 0;
       const slotPref =
         slot.slotType === 'hook' ? (seg.energyLevel > 0.6 ? 0.3 : -0.2) :
         slot.slotType === 'breathing' ? (seg.energyLevel < 0.5 ? 0.2 : -0.1) :
@@ -433,7 +444,7 @@ function assignSegmentsToTimeline(
       // Color profile alignment: prefer brighter segments at high-energy slots,
       // darker ones at breathing slots. We don't have per-segment color here,
       // but slot energy already encodes the proxy.
-      const score = energyMatch * 0.5 + quality * 0.3 + variety * 0.2 + slotPref;
+      const score = energyMatch * 0.42 + quality * 0.25 + chronology * 0.25 + slotPref + repeatPenalty;
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;
@@ -453,6 +464,7 @@ function assignSegmentsToTimeline(
       bestIdx = longestIdx;
     }
     used.set(bestIdx, (used.get(bestIdx) || 0) + 1);
+    lastIdx = bestIdx;
     out.push({ slot, segment: segments[bestIdx] });
   }
 
@@ -562,7 +574,9 @@ function mapColorProfileToFilter(profile: ColorProfile): string | null {
   const contrastLift = profile.contrast - 100;
   const saturationLift = profile.saturation - 100;
   const brightnessLift = profile.brightness - 100;
-  if (profile.saturation <= 82) return 'greyscale';
+  // Do not turn founder renders black-and-white unless the reference is truly
+  // near-monochrome. Slightly muted references should stay color-first.
+  if (profile.saturation <= 35) return 'greyscale';
   if (brightnessLift <= -12) return 'darken';
   if (brightnessLift >= 12) return 'lighten';
   if (contrastLift >= 8) return 'contrast';

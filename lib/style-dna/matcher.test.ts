@@ -149,6 +149,49 @@ describe('buildRenderConfig creative layers', () => {
     expect(clips.every((clip) => clip.filter === 'contrast')).toBe(true);
   });
 
+  it('keeps muted references in color instead of forcing black-and-white', () => {
+    const dna = makeStyleDNA({
+      color_profile: {
+        temperature: 0,
+        saturation: 70,
+        contrast: 112,
+        brightness: 100,
+      },
+    });
+
+    const config = buildRenderConfig(dna, source, {
+      targetDuration: 8,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    const clips = config.timeline.tracks[0].clips;
+    expect(clips.length).toBeGreaterThan(0);
+    expect(clips.every((clip) => clip.filter !== 'greyscale')).toBe(true);
+  });
+
+  it('rotates source segments instead of immediately looping one moment', () => {
+    const dna = makeStyleDNA({
+      cut_pattern: {
+        ...makeStyleDNA().cut_pattern,
+        avg_cut_duration_ms: 1000,
+        duration_histogram: [0, 0.8, 0.2, 0, 0, 0, 0],
+      },
+    });
+
+    const config = buildRenderConfig(dna, source, {
+      targetDuration: 7,
+      sourceVideoUrl: 'https://cdn.example.com/source.mp4',
+    });
+
+    const trims = config.timeline.tracks[0].clips
+      .slice(0, 4)
+      .map((clip) => clip.asset.trim);
+    expect(new Set(trims).size).toBeGreaterThan(1);
+    for (let i = 1; i < trims.length; i++) {
+      expect(trims[i]).not.toBe(trims[i - 1]);
+    }
+  });
+
   it('applies deterministic motion effects when zoom punches are present', () => {
     const dna = makeStyleDNA({
       motion_profile: {
