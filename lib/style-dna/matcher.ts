@@ -592,11 +592,11 @@ function buildTextOverlayTrack(
   options: MatcherOptions
 ): ShotstackTrack | undefined {
   const clips: ShotstackClip[] = [];
-  const style_string = `font-family:${style.font_family};color:${style.text_color};font-weight:${style.font_weight}`;
+  const titleStyle = mapTextStyleToTitleStyle(style);
 
   if (options.hookText) {
     clips.push({
-      asset: { type: 'title', text: options.hookText, style: style_string },
+      asset: { type: 'title', text: options.hookText, style: titleStyle },
       start: 0,
       length: 2,
       position: 'center',
@@ -606,7 +606,7 @@ function buildTextOverlayTrack(
   if (options.textOverlays) {
     for (const overlay of options.textOverlays) {
       clips.push({
-        asset: { type: 'title', text: overlay.text, style: style_string },
+        asset: { type: 'title', text: overlay.text, style: titleStyle },
         start: overlay.timestamp,
         length: overlay.duration,
         position: style.position === 'lower-third' ? 'bottom' : (style.position as ShotstackClip['position']),
@@ -617,7 +617,7 @@ function buildTextOverlayTrack(
     const last = assigned[assigned.length - 1];
     const ctaStart = Math.max(0, last.slot.startTime + last.slot.duration - 3);
     clips.push({
-      asset: { type: 'title', text: options.ctaText, style: style_string },
+      asset: { type: 'title', text: options.ctaText, style: titleStyle },
       start: Number(ctaStart.toFixed(3)),
       length: 3,
       position: 'center',
@@ -625,6 +625,13 @@ function buildTextOverlayTrack(
     });
   }
   return clips.length > 0 ? { clips } : undefined;
+}
+
+function mapTextStyleToTitleStyle(style: TextStyleProfile): string {
+  if (style.position === 'bottom' || style.position === 'lower-third') return 'subtitle';
+  if (style.font_weight >= 800) return 'blockbuster';
+  if (style.animation === 'glitch') return 'future';
+  return 'minimal';
 }
 
 function mapTextAnimation(animation: TextStyleProfile['animation']): string {

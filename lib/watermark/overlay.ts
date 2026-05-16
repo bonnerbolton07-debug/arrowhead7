@@ -67,10 +67,7 @@ export function buildWatermarkClip(options: WatermarkOptions): ShotstackClip {
     asset: {
       type: 'title',
       text: WATERMARK_TEXT,
-      style:
-        'font-family: Inter; font-weight: 600; font-size: 22px; color: #F5F0E8; ' +
-        'background: rgba(16,16,14,0.55); padding: 6px 10px; border-radius: 4px; ' +
-        'text-shadow: 0 1px 2px rgba(0,0,0,0.6);',
+      style: 'minimal',
     },
     start: 0,
     length: options.duration,

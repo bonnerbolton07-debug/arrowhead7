@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RENDER_MEDIA_LIMITS, buildTimelineFromStyleDNA } from './client';
+import { RENDER_MEDIA_LIMITS, buildTimelineFromStyleDNA, sanitizeShotstackConfig } from './client';
 import type { WhisperTranscription } from '@/lib/captions/whisper';
 
 describe('buildTimelineFromStyleDNA', () => {
@@ -56,6 +56,9 @@ describe('buildTimelineFromStyleDNA', () => {
       tier: 'free',
     });
     expect(config.timeline.tracks.length).toBeGreaterThanOrEqual(2);
+    const watermarkClip = config.timeline.tracks.at(-1)?.clips[0];
+    expect(watermarkClip?.asset.type).toBe('title');
+    expect(watermarkClip?.asset.style).toBe('minimal');
   });
 
   it('omits the watermark for pro tier', () => {
@@ -81,5 +84,31 @@ describe('buildTimelineFromStyleDNA', () => {
 
     expect(supplementalVisuals).toHaveLength(RENDER_MEDIA_LIMITS.supplementalVisuals);
     expect(supplementalAudio).toHaveLength(RENDER_MEDIA_LIMITS.supplementalAudio);
+  });
+
+  it('normalizes unsupported Shotstack title styles before submit', () => {
+    const config = buildTimelineFromStyleDNA('r2://source.mp4', null, {
+      captions: {
+        transcription: {
+          text: 'Hello',
+          language: 'en',
+          duration: 1,
+          segments: [{ id: 0, start: 0, end: 1, text: 'Hello' }],
+          words: [{ word: 'Hello', start: 0, end: 1 }],
+        },
+        style: 'tiktok-bold',
+      },
+      tier: 'free',
+    });
+    config.timeline.tracks[0].clips[0].asset.style = 'font-family: Inter; color: white;';
+
+    const safe = sanitizeShotstackConfig(config);
+    const titleClips = safe.timeline.tracks
+      .flatMap((track) => track.clips)
+      .filter((clip) => clip.asset.type === 'title');
+
+    expect(titleClips.length).toBeGreaterThan(0);
+    expect(titleClips.every((clip) => typeof clip.asset.style === 'string')).toBe(true);
+    expect(titleClips.map((clip) => clip.asset.style)).not.toContain('font-family: Inter; color: white;');
   });
 });

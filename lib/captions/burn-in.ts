@@ -118,29 +118,13 @@ interface AssetStyleInput {
 }
 
 /**
- * Encode caption styling as a Shotstack-compatible CSS-ish string.
+ * Map app caption styles to Shotstack's supported title style presets.
  * Exposed for unit testing.
  */
 export function buildAssetStyle(input: AssetStyleInput): string {
-  const weight = input.style === 'youtube-bar' ? 600 : 800;
-  const stroke = input.style === 'youtube-bar' ? 'none' : '2px rgba(0,0,0,0.85)';
-  const textAlign = 'center';
-  const background = input.background === 'transparent' ? 'none' : input.background;
-  const accent = input.highlightColor;
-
-  return [
-    `font-family: ${input.fontFamily}`,
-    `font-weight: ${weight}`,
-    `font-size: ${input.fontSize}px`,
-    `color: ${input.textColor}`,
-    `text-align: ${textAlign}`,
-    `background: ${background}`,
-    `padding: 8px 16px`,
-    `border-radius: 6px`,
-    `text-shadow: 0 2px 4px rgba(0,0,0,0.6)`,
-    `-webkit-text-stroke: ${stroke}`,
-    `--a7-highlight: ${accent}`,
-  ].join('; ');
+  if (input.style === 'youtube-bar') return 'subtitle';
+  if (input.style === 'karaoke') return 'chunk';
+  return 'blockbuster';
 }
 
 export const __test = {

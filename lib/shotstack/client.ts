@@ -29,6 +29,19 @@ export const RENDER_MEDIA_LIMITS = {
   supplementalAudio: 1,
 } as const;
 
+const SHOTSTACK_TITLE_STYLES = new Set([
+  'minimal',
+  'blockbuster',
+  'vogue',
+  'sketchy',
+  'skinny',
+  'chunk',
+  'chunkLight',
+  'marker',
+  'future',
+  'subtitle',
+]);
+
 function getShotstackConfig() {
   const apiUrl = process.env.SHOTSTACK_API_URL || 'https://api.shotstack.io/edit/stage';
   const isProduction = apiUrl.includes('/v1');
@@ -53,10 +66,11 @@ function getHeaders(): Record<string, string> {
 
 export async function submitRender(config: ShotstackRenderConfig): Promise<string> {
   const { apiUrl } = getShotstackConfig();
+  const safeConfig = sanitizeShotstackConfig(config);
   const response = await fetch(`${apiUrl}/render`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify(config),
+    body: JSON.stringify(safeConfig),
   });
 
   if (!response.ok) {
@@ -66,6 +80,33 @@ export async function submitRender(config: ShotstackRenderConfig): Promise<strin
 
   const data = await response.json();
   return data.response.id;
+}
+
+export function normalizeShotstackTitleStyle(value: unknown): string {
+  if (typeof value === 'string' && SHOTSTACK_TITLE_STYLES.has(value)) return value;
+  return 'minimal';
+}
+
+export function sanitizeShotstackConfig(config: ShotstackRenderConfig): ShotstackRenderConfig {
+  return {
+    ...config,
+    timeline: {
+      ...config.timeline,
+      tracks: config.timeline.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) => {
+          if (clip.asset.type !== 'title') return clip;
+          return {
+            ...clip,
+            asset: {
+              ...clip.asset,
+              style: normalizeShotstackTitleStyle(clip.asset.style),
+            },
+          };
+        }),
+      })),
+    },
+  };
 }
 
 /**
