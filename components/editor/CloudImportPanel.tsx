@@ -345,7 +345,12 @@ export function CloudImportPanel({ onImported, className }: Props) {
           configured={browserConfigured}
           onConnect={() => {
             const slug = provider === 'google_drive' ? 'google-drive' : 'dropbox';
-            window.location.href = `/api/auth/${slug}/connect?next=/editor`;
+            const next = new URL(window.location.href);
+            next.pathname = '/editor';
+            next.searchParams.set('step', 'footage');
+            window.location.href = `/api/auth/${slug}/connect?next=${encodeURIComponent(
+              `${next.pathname}${next.search}${next.hash}`
+            )}`;
           }}
         />
       )}

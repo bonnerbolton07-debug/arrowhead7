@@ -7,7 +7,12 @@ import {
   exchangeGoogleCode,
   fetchGoogleUserInfo,
 } from '@/lib/cloud/google-drive';
-import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
+import {
+  getRedirectUri,
+  readAndClearState,
+  readOAuthState,
+  verifyState,
+} from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
 import { ensureProfileForUser } from '@/lib/supabase/profile';
 import { resolveOAuthCallbackUser, userTail } from '@/lib/oauth/callback-user';
@@ -21,12 +26,22 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
+  const signedState = readOAuthState('google-drive', receivedState);
+  const {
+    state: expectedState,
+    nextPath: cookieNextPath,
+    redirectUri: cookieRedirect,
+    userId: cookieUserId,
+  } =
     await readAndClearState('google-drive');
+  const nextPath = signedState?.nextPath ?? cookieNextPath;
+  const storedRedirect = signedState?.redirectUri ?? cookieRedirect;
+  const userId = cookieUserId ?? signedState?.userId ?? null;
   logOAuthEvent('google_drive', 'callback_received', {
     hasCode: Boolean(code),
     hasState: Boolean(receivedState),
     hasStoredState: Boolean(expectedState),
+    hasSignedState: Boolean(signedState),
     hasStoredUser: Boolean(userId),
     userTail: userTail(userId),
   });
@@ -44,9 +59,10 @@ export async function GET(request: NextRequest) {
     logOAuthEvent('google_drive', 'missing_code');
     return fail('missing_code');
   }
-  if (!verifyState(expectedState, receivedState)) {
+  if (!verifyState(expectedState, receivedState) && !signedState) {
     logOAuthEvent('google_drive', 'invalid_state', {
       hasStoredState: Boolean(expectedState),
+      hasSignedState: Boolean(signedState),
       hasReceivedState: Boolean(receivedState),
     });
     return fail('invalid_state');

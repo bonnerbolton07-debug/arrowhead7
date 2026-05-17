@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildXAuthUrl, xClientCreds } from '@/lib/distribute/x';
 import {
-  generateState,
+  createOAuthState,
   generatePkcePair,
   getRedirectUri,
   setStateCookie,
@@ -19,11 +19,11 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     xClientCreds();
-    const state = generateState();
     const { verifier, challenge } = generatePkcePair();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('x', request);
+    const state = createOAuthState('x', user.id, nextPath, redirectUri);
     await setStateCookie('x', state, nextPath, redirectUri, user.id);
     await setPkceCookie('x', verifier);
     return NextResponse.redirect(buildXAuthUrl({ state, challenge, redirectUri }));

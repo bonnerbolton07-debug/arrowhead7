@@ -4,7 +4,12 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeXCode, fetchXUser } from '@/lib/distribute/x';
-import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
+import {
+  getRedirectUri,
+  readAndClearState,
+  readOAuthState,
+  verifyState,
+} from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
 import { resolveOAuthCallbackUser } from '@/lib/oauth/callback-user';
 
@@ -16,14 +21,18 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
+  const signedState = readOAuthState('x', receivedState);
   const {
     state: expectedState,
     verifier,
-    nextPath,
-    redirectUri: storedRedirect,
-    userId,
+    nextPath: cookieNextPath,
+    redirectUri: cookieRedirect,
+    userId: cookieUserId,
   } =
     await readAndClearState('x');
+  const nextPath = signedState?.nextPath ?? cookieNextPath;
+  const storedRedirect = signedState?.redirectUri ?? cookieRedirect;
+  const userId = cookieUserId ?? signedState?.userId ?? null;
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -32,7 +41,7 @@ export async function GET(request: NextRequest) {
   if (providerError) return fail(providerError);
   if (!code) return fail('missing_code');
   if (!verifier) return fail('missing_verifier');
-  if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
+  if (!verifyState(expectedState, receivedState) && !signedState) return fail('invalid_state');
 
   try {
     const user = await resolveOAuthCallbackUser(userId);

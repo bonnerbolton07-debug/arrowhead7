@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildYouTubeAuthUrl } from '@/lib/distribute/youtube';
 import { googleClientCreds } from '@/lib/cloud/google-drive';
-import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
+import { createOAuthState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,10 +14,10 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     googleClientCreds();
-    const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('youtube', request);
+    const state = createOAuthState('youtube', user.id, nextPath, redirectUri);
     await setStateCookie('youtube', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildYouTubeAuthUrl(state, redirectUri));
   } catch (e) {

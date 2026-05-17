@@ -4,7 +4,12 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeDropboxCode, fetchDropboxAccount } from '@/lib/cloud/dropbox';
-import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
+import {
+  getRedirectUri,
+  readAndClearState,
+  readOAuthState,
+  verifyState,
+} from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
 import { ensureProfileForUser } from '@/lib/supabase/profile';
 import { resolveOAuthCallbackUser, userTail } from '@/lib/oauth/callback-user';
@@ -18,12 +23,22 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
+  const signedState = readOAuthState('dropbox', receivedState);
+  const {
+    state: expectedState,
+    nextPath: cookieNextPath,
+    redirectUri: cookieRedirect,
+    userId: cookieUserId,
+  } =
     await readAndClearState('dropbox');
+  const nextPath = signedState?.nextPath ?? cookieNextPath;
+  const storedRedirect = signedState?.redirectUri ?? cookieRedirect;
+  const userId = cookieUserId ?? signedState?.userId ?? null;
   logOAuthEvent('dropbox', 'callback_received', {
     hasCode: Boolean(code),
     hasState: Boolean(receivedState),
     hasStoredState: Boolean(expectedState),
+    hasSignedState: Boolean(signedState),
     hasStoredUser: Boolean(userId),
     userTail: userTail(userId),
   });
@@ -40,9 +55,10 @@ export async function GET(request: NextRequest) {
     logOAuthEvent('dropbox', 'missing_code');
     return fail('missing_code');
   }
-  if (!verifyState(expectedState, receivedState)) {
+  if (!verifyState(expectedState, receivedState) && !signedState) {
     logOAuthEvent('dropbox', 'invalid_state', {
       hasStoredState: Boolean(expectedState),
+      hasSignedState: Boolean(signedState),
       hasReceivedState: Boolean(receivedState),
     });
     return fail('invalid_state');

@@ -9,7 +9,7 @@ import {
   GOOGLE_DRIVE_SCOPES,
   googleClientCreds,
 } from '@/lib/cloud/google-drive';
-import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
+import { createOAuthState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,9 +18,9 @@ export async function GET(request: NextRequest) {
     const user = await requireUser();
     googleClientCreds(); // throws if env missing
 
-    const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('google-drive', request);
+    const state = createOAuthState('google-drive', user.id, nextPath, redirectUri);
     await setStateCookie('google-drive', state, nextPath, redirectUri, user.id);
 
     const url = buildGoogleAuthUrl({

@@ -38,6 +38,10 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 'render', label: 'Render' },
 ];
 
+function parseStep(value: string | null): Step | null {
+  return STEPS.some((s) => s.id === value) ? (value as Step) : null;
+}
+
 type UploadState = 'idle' | 'uploading' | 'done' | 'error';
 type AnalyzeState = 'idle' | 'analyzing' | 'done' | 'error';
 type RenderState = 'idle' | 'submitting' | 'processing' | 'completed' | 'failed';
@@ -392,6 +396,7 @@ function EditorPageInner() {
   const strategyBrief = useStrategyBrief();
   const searchParams = useSearchParams();
   const resumeId = searchParams?.get('id') ?? null;
+  const returnStep = parseStep(searchParams?.get('step') ?? null);
   const requestedRenderProvider = useMemo(() => {
     const provider = searchParams?.get('renderProvider')?.toLowerCase();
     return provider === 'a7_engine' || provider === 'shotstack' || provider === 'auto'
@@ -399,7 +404,7 @@ function EditorPageInner() {
       : null;
   }, [searchParams]);
   const isVariantRequest = searchParams?.get('variant') === '1';
-  const [step, setStep] = useState<Step>('reference');
+  const [step, setStep] = useState<Step>(returnStep ?? 'reference');
   const [resumeState, setResumeState] = useState<'idle' | 'loading' | 'done' | 'error'>(
     resumeId ? 'loading' : 'idle'
   );

@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildDropboxAuthUrl, dropboxClientCreds } from '@/lib/cloud/dropbox';
-import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
+import { createOAuthState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,9 +13,9 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     dropboxClientCreds();
-    const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('dropbox', request);
+    const state = createOAuthState('dropbox', user.id, nextPath, redirectUri);
     await setStateCookie('dropbox', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildDropboxAuthUrl(state, redirectUri));
   } catch (e) {

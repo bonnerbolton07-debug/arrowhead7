@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/supabase/server';
 import { buildInstagramAuthUrl, fbClientCreds } from '@/lib/distribute/instagram';
-import { generateState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
+import { createOAuthState, getRedirectUri, setStateCookie } from '@/lib/oauth/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,10 +13,10 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser();
     fbClientCreds();
-    const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('instagram', request);
+    const state = createOAuthState('instagram', user.id, nextPath, redirectUri);
     await setStateCookie('instagram', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildInstagramAuthUrl(state, redirectUri));
   } catch (e) {

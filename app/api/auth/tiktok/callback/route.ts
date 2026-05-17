@@ -4,7 +4,12 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeTikTokCode, fetchTikTokUser } from '@/lib/distribute/tiktok';
-import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
+import {
+  getRedirectUri,
+  readAndClearState,
+  readOAuthState,
+  verifyState,
+} from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
 import { resolveOAuthCallbackUser } from '@/lib/oauth/callback-user';
 
@@ -16,8 +21,17 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
+  const signedState = readOAuthState('tiktok', receivedState);
+  const {
+    state: expectedState,
+    nextPath: cookieNextPath,
+    redirectUri: cookieRedirect,
+    userId: cookieUserId,
+  } =
     await readAndClearState('tiktok');
+  const nextPath = signedState?.nextPath ?? cookieNextPath;
+  const storedRedirect = signedState?.redirectUri ?? cookieRedirect;
+  const userId = cookieUserId ?? signedState?.userId ?? null;
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
@@ -25,7 +39,7 @@ export async function GET(request: NextRequest) {
 
   if (providerError) return fail(providerError);
   if (!code) return fail('missing_code');
-  if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
+  if (!verifyState(expectedState, receivedState) && !signedState) return fail('invalid_state');
 
   try {
     const user = await resolveOAuthCallbackUser(userId);

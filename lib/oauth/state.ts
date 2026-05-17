@@ -13,6 +13,7 @@
 import crypto from 'crypto';
 import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
+import { decryptToken, encryptToken } from '@/lib/crypto/tokens';
 
 const STATE_COOKIE_PREFIX = 'a7_oauth_state__';
 const PKCE_COOKIE_PREFIX = 'a7_oauth_pkce__';
@@ -20,6 +21,7 @@ const NEXT_COOKIE_PREFIX = 'a7_oauth_next__';
 const REDIRECT_COOKIE_PREFIX = 'a7_oauth_redirect__';
 const USER_COOKIE_PREFIX = 'a7_oauth_user__';
 const MAX_AGE_SECONDS = 600;
+const STATE_TOKEN_PREFIX = 'a7v1.';
 
 function cookieOpts(maxAge = MAX_AGE_SECONDS) {
   return {
@@ -33,6 +35,12 @@ function cookieOpts(maxAge = MAX_AGE_SECONDS) {
 
 export function generateState(): string {
   return crypto.randomBytes(32).toString('base64url');
+}
+
+export interface OAuthStatePayload {
+  userId: string;
+  nextPath: string;
+  redirectUri: string | null;
 }
 
 export function generatePkcePair(): { verifier: string; challenge: string } {
@@ -78,6 +86,60 @@ function verifySignedUserId(value: string | undefined): string | null {
     const expectedBuf = Buffer.from(expected);
     if (receivedBuf.length !== expectedBuf.length) return null;
     return crypto.timingSafeEqual(receivedBuf, expectedBuf) ? userId : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createOAuthState(
+  provider: string,
+  userId: string,
+  nextPath?: string,
+  redirectUri?: string
+): string {
+  const payload = {
+    p: provider,
+    u: userId,
+    n: nextPath && nextPath.startsWith('/') ? nextPath : '/dashboard/channels',
+    r: redirectUri && /^https?:\/\//i.test(redirectUri) ? redirectUri : null,
+    e: Date.now() + MAX_AGE_SECONDS * 1000,
+  };
+  const encrypted = encryptToken(JSON.stringify(payload));
+  return `${STATE_TOKEN_PREFIX}${Buffer.from(encrypted, 'utf8').toString('base64url')}`;
+}
+
+export function readOAuthState(
+  provider: string,
+  state: string | null
+): OAuthStatePayload | null {
+  if (!state?.startsWith(STATE_TOKEN_PREFIX)) return null;
+  try {
+    const encrypted = Buffer.from(
+      state.slice(STATE_TOKEN_PREFIX.length),
+      'base64url'
+    ).toString('utf8');
+    const payload = JSON.parse(decryptToken(encrypted)) as {
+      p?: unknown;
+      u?: unknown;
+      n?: unknown;
+      r?: unknown;
+      e?: unknown;
+    };
+
+    if (payload.p !== provider) return null;
+    if (typeof payload.u !== 'string' || !payload.u) return null;
+    if (typeof payload.e !== 'number' || payload.e < Date.now()) return null;
+
+    const nextPath =
+      typeof payload.n === 'string' && payload.n.startsWith('/')
+        ? payload.n
+        : '/dashboard/channels';
+    const redirectUri =
+      typeof payload.r === 'string' && /^https?:\/\//i.test(payload.r)
+        ? payload.r
+        : null;
+
+    return { userId: payload.u, nextPath, redirectUri };
   } catch {
     return null;
   }
