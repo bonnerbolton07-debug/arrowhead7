@@ -63,7 +63,21 @@ const ERROR_MAP: Record<string, string> = {
     'Dropbox is not connected yet because A7 needs Dropbox OAuth credentials in production.',
   cloud_connection_failed:
     'A7 could not finish saving that connection. Please try reconnecting once.',
+  provider_setup_secure_storage:
+    'A7 secure connection storage was being repaired. Please try connecting again.',
 };
+
+function connectionErrorMessage(error?: string): string | null {
+  if (!error) return null;
+  if (/TOKEN_ENCRYPTION_KEY|token encryption/i.test(error)) {
+    return ERROR_MAP.provider_setup_secure_storage;
+  }
+  return ERROR_MAP[error] ?? 'Connection failed. Please try again.';
+}
+
+function shouldShowOAuthDetails(error?: string): boolean {
+  return Boolean(error && /redirect[_ ]?uri|redirect_uri_mismatch/i.test(error));
+}
 
 const CONNECTED_PROVIDERS = new Set([
   'youtube',
@@ -237,9 +251,7 @@ export default async function ChannelsPage({
   const connectedLabel = sp.connected && CONNECTED_PROVIDERS.has(sp.connected)
     ? sp.connected.replace(/_/g, ' ')
     : null;
-  const errorMsg = sp.error
-    ? (ERROR_MAP[sp.error] ?? 'Connection failed. Please try again.')
-    : null;
+  const errorMsg = connectionErrorMessage(sp.error);
 
   const { tier, channels, distributions, clouds } = await fetchData();
   const limit = TIER_LIMITS[tier].max_channels;
@@ -281,7 +293,9 @@ export default async function ChannelsPage({
             {errorMsg}
           </div>
         )}
-        {sp.error && <OAuthErrorPanel error={sp.error} />}
+        {shouldShowOAuthDetails(sp.error) && sp.error && (
+          <OAuthErrorPanel error={sp.error} />
+        )}
 
         {/* Publishing Platforms */}
         <section>

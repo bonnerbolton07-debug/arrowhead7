@@ -25,8 +25,11 @@ export async function GET(request: NextRequest) {
     if (msg === 'Unauthorized') {
       return NextResponse.redirect(new URL('/auth/login', request.url));
     }
+    const code = msg.includes('TOKEN_ENCRYPTION_KEY')
+      ? 'provider_setup_secure_storage'
+      : msg;
     return NextResponse.redirect(
-      new URL(`/dashboard/channels?error=${encodeURIComponent(msg)}`, request.url)
+      new URL(`/dashboard/channels?error=${encodeURIComponent(code)}`, request.url)
     );
   }
 }

@@ -23,7 +23,11 @@ export async function GET(request: NextRequest) {
     if (msg === 'Unauthorized') {
       return NextResponse.redirect(new URL('/auth/login', request.url));
     }
-    const code = msg.includes('DROPBOX_APP_KEY') ? 'provider_setup_dropbox' : msg;
+    const code = msg.includes('TOKEN_ENCRYPTION_KEY')
+      ? 'provider_setup_secure_storage'
+      : msg.includes('DROPBOX_APP_KEY')
+      ? 'provider_setup_dropbox'
+      : msg;
     return NextResponse.redirect(
       new URL(`/dashboard/channels?error=${encodeURIComponent(code)}`, request.url)
     );

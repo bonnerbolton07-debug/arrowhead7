@@ -35,7 +35,11 @@ export async function GET(request: NextRequest) {
     if (msg === 'Unauthorized') {
       return NextResponse.redirect(new URL('/auth/login', request.url));
     }
-    const code = msg.includes('GOOGLE_CLIENT_ID') ? 'provider_setup_google_drive' : msg;
+    const code = msg.includes('TOKEN_ENCRYPTION_KEY')
+      ? 'provider_setup_secure_storage'
+      : msg.includes('GOOGLE_CLIENT_ID')
+      ? 'provider_setup_google_drive'
+      : msg;
     return NextResponse.redirect(
       new URL(`/dashboard/channels?error=${encodeURIComponent(code)}`, request.url)
     );

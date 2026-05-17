@@ -19,6 +19,7 @@ function providerSetup() {
     dropbox_configured: Boolean(
       process.env.DROPBOX_APP_KEY && process.env.DROPBOX_APP_SECRET
     ),
+    secure_storage_configured: Boolean(process.env.TOKEN_ENCRYPTION_KEY),
     icloud_share_link: true,
   };
 }
