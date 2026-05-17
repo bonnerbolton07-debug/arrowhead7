@@ -59,7 +59,14 @@ export async function POST(request: NextRequest) {
       sizeBytes: out.bytes,
       folder,
       source: 'google_drive',
-      metadata: { drive_file_id: fileId },
+      metadata: {
+        drive_file_id: fileId,
+        drive_web_view_link: meta.webViewLink ?? null,
+      },
+      thumbnailUrl: meta.thumbnailLink ?? null,
+      durationMs: meta.videoMediaMetadata?.durationMillis
+        ? Number(meta.videoMediaMetadata.durationMillis)
+        : null,
     });
 
     return NextResponse.json({ key: r2Key, file });

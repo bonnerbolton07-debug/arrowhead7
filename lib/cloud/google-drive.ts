@@ -162,6 +162,7 @@ export interface DriveFile {
   thumbnailLink?: string;
   iconLink?: string;
   parents?: string[];
+  webViewLink?: string;
   videoMediaMetadata?: { width?: number; height?: number; durationMillis?: string };
 }
 
@@ -172,17 +173,22 @@ export async function listDriveFiles(opts: {
   pageSize?: number;
   videosOnly?: boolean;
 }): Promise<{ files: DriveFile[]; nextPageToken?: string }> {
-  const folderId = opts.folderId || 'root';
-  const baseQuery = [`'${folderId}' in parents`, 'trashed = false'];
+  const folderId = opts.folderId;
+  const baseQuery = ['trashed = false'];
+  if (folderId) {
+    baseQuery.unshift(`'${folderId}' in parents`);
+  }
   if (opts.videosOnly) {
     baseQuery.push("(mimeType contains 'video/' or mimeType = 'application/vnd.google-apps.folder')");
   }
   const params = new URLSearchParams({
     q: baseQuery.join(' and '),
-    pageSize: String(opts.pageSize ?? 50),
+    pageSize: String(opts.pageSize ?? 100),
     fields:
-      'nextPageToken,files(id,name,mimeType,size,modifiedTime,thumbnailLink,iconLink,parents,videoMediaMetadata)',
+      'nextPageToken,files(id,name,mimeType,size,modifiedTime,thumbnailLink,iconLink,parents,webViewLink,videoMediaMetadata)',
     orderBy: 'folder,modifiedTime desc',
+    includeItemsFromAllDrives: 'true',
+    supportsAllDrives: 'true',
   });
   if (opts.pageToken) params.set('pageToken', opts.pageToken);
 
@@ -200,7 +206,7 @@ export async function getDriveFile(opts: {
   fileId: string;
 }): Promise<DriveFile> {
   const res = await fetch(
-    `${DRIVE_API}/files/${encodeURIComponent(opts.fileId)}?fields=id,name,mimeType,size,modifiedTime,thumbnailLink,videoMediaMetadata`,
+    `${DRIVE_API}/files/${encodeURIComponent(opts.fileId)}?fields=id,name,mimeType,size,modifiedTime,thumbnailLink,webViewLink,videoMediaMetadata&supportsAllDrives=true`,
     { headers: { Authorization: `Bearer ${opts.accessToken}` } }
   );
   if (!res.ok) {

@@ -111,7 +111,7 @@ export function VaultManager({
   const [storageBytes, setStorageBytes] = useState(initialStorageBytes);
   const [fileCount, setFileCount] = useState(initialFileCount);
   const [folder, setFolder] = useState<VaultFolder>('references');
-  const [showImport, setShowImport] = useState(false);
+  const [showImport, setShowImport] = useState(() => connections.length > 0);
   const [uploadingItems, setUploadingItems] = useState<
     { id: string; name: string; progress: number; folder: VaultFolder; error?: string }[]
   >([]);
@@ -134,6 +134,7 @@ export function VaultManager({
           dropbox: !!data.setup?.dropbox_configured,
           icloud: true,
         });
+        if (data.connections?.length > 0) setShowImport(true);
       } catch {
         // keep conservative defaults
       }
@@ -438,6 +439,9 @@ export function VaultManager({
             return (
               <div
                 key={id}
+                onClick={() => {
+                  if (connected && !meta.shareLink) setShowImport(true);
+                }}
                 className="rounded-lg p-4 flex items-center gap-3"
                 style={{
                   background: connected

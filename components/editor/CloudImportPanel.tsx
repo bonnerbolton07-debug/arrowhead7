@@ -29,6 +29,10 @@ interface DriveFile {
   name: string;
   mimeType: string;
   size?: number | string;
+  thumbnailLink?: string;
+  iconLink?: string;
+  modifiedTime?: string;
+  videoMediaMetadata?: { durationMillis?: string };
 }
 
 interface DropboxEntry {
@@ -46,6 +50,10 @@ interface BrowserItem {
   kind: 'folder' | 'video';
   size?: number;
   providerRef: string;
+  thumbnailUrl?: string;
+  iconUrl?: string;
+  modifiedTime?: string;
+  durationMs?: number;
 }
 
 function formatBytes(n?: number): string {
@@ -59,6 +67,14 @@ function formatBytes(n?: number): string {
     i++;
   }
   return `${v.toFixed(1)} ${units[i]}`;
+}
+
+function formatDuration(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  const total = Math.round(ms / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 interface Props {
@@ -92,6 +108,10 @@ export function CloudImportPanel({ onImported, className }: Props) {
 
   const [shareUrl, setShareUrl] = useState('');
   const [genericUrl, setGenericUrl] = useState('');
+  const driveReady = providers.google_drive;
+  const dropboxReady = providers.dropbox;
+  const driveConfigured = providers.google_drive_configured;
+  const dropboxConfigured = providers.dropbox_configured;
 
   useEffect(() => {
     let cancelled = false;
@@ -154,6 +174,12 @@ export function CloudImportPanel({ onImported, className }: Props) {
                 : 'video',
             size: typeof f.size === 'string' ? Number(f.size) : f.size,
             providerRef: f.id,
+            thumbnailUrl: f.thumbnailLink,
+            iconUrl: f.iconLink,
+            modifiedTime: f.modifiedTime,
+            durationMs: f.videoMediaMetadata?.durationMillis
+              ? Number(f.videoMediaMetadata.durationMillis)
+              : undefined,
           }))
         );
       } else {
@@ -188,7 +214,7 @@ export function CloudImportPanel({ onImported, className }: Props) {
       setItems([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [provider, driveReady, dropboxReady]);
 
   async function importDriveOrDropbox(item: BrowserItem) {
     setImportingId(item.id);
@@ -258,10 +284,6 @@ export function CloudImportPanel({ onImported, className }: Props) {
     }
   }
 
-  const driveReady = providers.google_drive;
-  const dropboxReady = providers.dropbox;
-  const driveConfigured = providers.google_drive_configured;
-  const dropboxConfigured = providers.dropbox_configured;
   const browsing = provider === 'google_drive' || provider === 'dropbox';
   const showBrowserNotConnected =
     (provider === 'google_drive' && !driveReady) ||
@@ -563,30 +585,70 @@ function FileBrowser({
           This folder has no videos.
         </div>
       ) : (
-        <ul className="max-h-72 overflow-auto divide-y divide-a7-text/[0.04]">
+        <div className="max-h-80 overflow-auto p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {items.map((item) => (
-            <li
+            <div
               key={item.id}
-              className="flex items-center gap-3 px-3 py-2"
+              className="rounded-md overflow-hidden"
+              style={{
+                background: 'linear-gradient(180deg, rgba(16,16,14,0.9), rgba(10,10,10,0.95))',
+                border: '1px solid rgba(245,240,232,0.06)',
+              }}
             >
-              <span
-                className="text-[10px] font-mono uppercase tracking-wide"
+              <div
+                className="relative aspect-video flex items-center justify-center"
                 style={{
-                  color: item.kind === 'folder' ? '#D4944A' : '#5BE8D5',
+                  background:
+                    item.kind === 'folder'
+                      ? 'linear-gradient(135deg, rgba(212,148,74,0.18), rgba(212,148,74,0.04))'
+                      : 'linear-gradient(135deg, rgba(45,212,191,0.12), rgba(45,212,191,0.02))',
                 }}
               >
-                {item.kind === 'folder' ? 'DIR' : 'VID'}
-              </span>
-              <span className="flex-1 truncate text-xs text-a7-text/80">
-                {item.name}
-              </span>
-              <span className="text-[10px] text-a7-text/30 w-16 text-right">
-                {formatBytes(item.size)}
-              </span>
+                {item.thumbnailUrl ? (
+                  // Google thumbnail URLs are provider-hosted previews. They are
+                  // short-lived enough for selection UI but not a permanent asset.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={item.thumbnailUrl}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : item.iconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.iconUrl} alt="" className="h-8 w-8 opacity-70" />
+                ) : (
+                  <span
+                    className="text-[10px] font-mono uppercase tracking-wide"
+                    style={{ color: item.kind === 'folder' ? '#D4944A' : '#5BE8D5' }}
+                  >
+                    {item.kind === 'folder' ? 'Folder' : 'Video'}
+                  </span>
+                )}
+                {item.kind === 'video' && (
+                  <span className="absolute left-2 top-2 text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-black/60 text-[#5BE8D5]">
+                    Video
+                  </span>
+                )}
+                {formatDuration(item.durationMs) && (
+                  <span className="absolute right-2 bottom-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/70 text-a7-text/85">
+                    {formatDuration(item.durationMs)}
+                  </span>
+                )}
+              </div>
+              <div className="p-3">
+                <div className="truncate text-xs text-a7-text/85 mb-1">{item.name}</div>
+                <div className="flex items-center justify-between gap-2 text-[10px] text-a7-text/35">
+                  <span>{item.kind === 'folder' ? 'Folder' : formatBytes(item.size)}</span>
+                  {item.modifiedTime && <span>{new Date(item.modifiedTime).toLocaleDateString()}</span>}
+                </div>
+              </div>
+              <div className="px-3 pb-3">
               {item.kind === 'folder' ? (
                 <button
                   onClick={() => onOpen(item)}
-                  className="text-[11px] px-2 py-1 rounded border border-a7-text/[0.08] text-a7-text/60 hover:text-a7-text"
+                  className="w-full text-[11px] px-2 py-1.5 rounded border border-a7-text/[0.08] text-a7-text/70 hover:text-a7-text"
                 >
                   Open
                 </button>
@@ -594,7 +656,7 @@ function FileBrowser({
                 <button
                   disabled={importingId === item.id}
                   onClick={() => onImport(item)}
-                  className="text-[11px] px-2 py-1 rounded font-medium disabled:opacity-40"
+                  className="w-full text-[11px] px-2 py-1.5 rounded font-medium disabled:opacity-40"
                   style={{
                     background:
                       'linear-gradient(135deg, rgba(45,212,191,0.15), rgba(45,212,191,0.05))',
@@ -605,9 +667,11 @@ function FileBrowser({
                   {importingId === item.id ? 'Pulling…' : 'Pull'}
                 </button>
               )}
-            </li>
+              </div>
+            </div>
           ))}
-        </ul>
+          </div>
+        </div>
       )}
     </div>
   );

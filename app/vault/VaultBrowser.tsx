@@ -20,6 +20,10 @@ interface BrowserItem {
   size?: number;
   // Provider-specific reference
   providerRef: string;
+  thumbnailUrl?: string;
+  iconUrl?: string;
+  modifiedTime?: string;
+  durationMs?: number;
 }
 
 interface DriveFile {
@@ -27,6 +31,10 @@ interface DriveFile {
   name: string;
   mimeType: string;
   size?: number | string;
+  thumbnailLink?: string;
+  iconLink?: string;
+  modifiedTime?: string;
+  videoMediaMetadata?: { durationMillis?: string };
 }
 
 interface DropboxEntry {
@@ -49,6 +57,14 @@ function formatBytes(n?: number): string {
     i++;
   }
   return `${v.toFixed(1)} ${units[i]}`;
+}
+
+function formatDuration(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  const total = Math.round(ms / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
@@ -98,6 +114,12 @@ export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
                   : 'video',
               size: typeof f.size === 'string' ? Number(f.size) : f.size,
               providerRef: f.id,
+              thumbnailUrl: f.thumbnailLink,
+              iconUrl: f.iconLink,
+              modifiedTime: f.modifiedTime,
+              durationMs: f.videoMediaMetadata?.durationMillis
+                ? Number(f.videoMediaMetadata.durationMillis)
+                : undefined,
             }))
           );
         } else {
@@ -268,42 +290,83 @@ export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
             This folder is empty (or has no videos).
           </div>
         ) : (
-          <ul className="divide-y divide-a7-text/[0.04]">
+          <div className="p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {items.map((item) => (
-              <li
+              <div
                 key={item.id}
-                className="flex items-center gap-4 px-4 py-3 hover:bg-a7-text/[0.02]"
+                className="rounded-md overflow-hidden"
+                style={{
+                  background:
+                    'linear-gradient(180deg, rgba(16,16,14,0.9), rgba(10,10,10,0.95))',
+                  border: '1px solid rgba(245,240,232,0.06)',
+                }}
               >
-                <span
-                  className="text-xs font-mono uppercase tracking-wide"
+                <div
+                  className="relative aspect-video flex items-center justify-center"
                   style={{
-                    color: item.kind === 'folder' ? '#D4944A' : '#5BE8D5',
+                    background:
+                      item.kind === 'folder'
+                        ? 'linear-gradient(135deg, rgba(212,148,74,0.18), rgba(212,148,74,0.04))'
+                        : 'linear-gradient(135deg, rgba(45,212,191,0.12), rgba(45,212,191,0.02))',
                   }}
                 >
-                  {item.kind === 'folder' ? 'DIR' : 'VID'}
-                </span>
-                <span className="flex-1 truncate text-sm text-a7-text/80">
-                  {item.name}
-                </span>
-                <span className="text-xs text-a7-text/30 w-20 text-right">
-                  {formatBytes(item.size)}
-                </span>
+                  {item.thumbnailUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={item.thumbnailUrl}
+                      alt=""
+                      loading="lazy"
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : item.iconUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.iconUrl} alt="" className="h-8 w-8 opacity-70" />
+                  ) : (
+                    <span
+                      className="text-[10px] font-mono uppercase tracking-wide"
+                      style={{ color: item.kind === 'folder' ? '#D4944A' : '#5BE8D5' }}
+                    >
+                      {item.kind === 'folder' ? 'Folder' : 'Video'}
+                    </span>
+                  )}
+                  {item.kind === 'video' && (
+                    <span className="absolute left-2 top-2 text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-black/60 text-[#5BE8D5]">
+                      Video
+                    </span>
+                  )}
+                  {formatDuration(item.durationMs) && (
+                    <span className="absolute right-2 bottom-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/70 text-a7-text/85">
+                      {formatDuration(item.durationMs)}
+                    </span>
+                  )}
+                </div>
+                <div className="p-3">
+                  <div className="truncate text-sm text-a7-text/85 mb-1">{item.name}</div>
+                  <div className="flex justify-between gap-2 text-[10px] text-a7-text/35">
+                    <span>{item.kind === 'folder' ? 'Folder' : formatBytes(item.size)}</span>
+                    {item.modifiedTime && (
+                      <span>{new Date(item.modifiedTime).toLocaleDateString()}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="px-3 pb-3">
                 {item.kind === 'folder' ? (
                   <button
                     onClick={() => enterFolder(item.providerRef)}
-                    className="text-xs px-3 py-1.5 rounded-md text-a7-text/60 border border-a7-text/[0.08] hover:text-a7-text"
+                    className="w-full text-xs px-3 py-1.5 rounded-md text-a7-text/70 border border-a7-text/[0.08] hover:text-a7-text"
                   >
                     Open
                   </button>
                 ) : importedKeys[item.id] ? (
-                  <span className="text-xs text-a7-text/40 italic">
+                  <span className="block text-center text-xs text-a7-text/40 italic">
                     Imported
                   </span>
                 ) : (
                   <button
                     disabled={importingId === item.id}
                     onClick={() => importItem(item)}
-                    className="text-xs px-3 py-1.5 rounded-md font-medium disabled:opacity-50"
+                    className="w-full text-xs px-3 py-1.5 rounded-md font-medium disabled:opacity-50"
                     style={{
                       background:
                         'linear-gradient(135deg, rgba(45,212,191,0.15), rgba(45,212,191,0.05))',
@@ -314,9 +377,11 @@ export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
                     {importingId === item.id ? 'Importing…' : 'Import'}
                   </button>
                 )}
-              </li>
+                </div>
+              </div>
             ))}
-          </ul>
+            </div>
+          </div>
         )}
       </div>
     </div>
