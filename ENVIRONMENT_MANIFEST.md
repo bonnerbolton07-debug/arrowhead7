@@ -23,8 +23,8 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Current Vercel project: `arrowhead7`
 - Current Vercel project id: `prj_0e4McTccad8sEv2U6fVUkiXcoCgg`
 - Previous Vercel container: `bonner-ai-services`
-- Current deployment id: `dpl_4N3EPd75bQM69JcXSYds98n2JKsF`
-- Current deployment URL: `https://arrowhead7-ms42rwcy8-bonnerbolton07-debugs-projects.vercel.app`
+- Current deployment id: `dpl_J1aUGDTdvWwD22fpS8MARYg2twrQ`
+- Current deployment URL: `https://arrowhead7-mt1dzfaxk-bonnerbolton07-debugs-projects.vercel.app`
 - Current aliases:
   - `https://arrowhead7.ai`
   - `https://www.arrowhead7.ai`

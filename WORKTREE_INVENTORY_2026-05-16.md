@@ -10,7 +10,7 @@ No worktrees or branches were deleted.
 
 - Canonical worktree: `/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP`
 - Canonical branch: `main`
-- Current deployed source commit: `d364cd8 docs: add A7 environment control docs`
+- Current deployed source commit: `3bbb4d8 docs: record A7 Vercel migration`
 - Current app-code baseline: `6881da4 fix(render): harden pipeline status and exports`
 - Worktrees reported by `git worktree list`: 42 total including main
 - Branch lines containing `claude/`: 51 local/remote branch refs
@@ -68,4 +68,4 @@ Required before cleanup:
 
 Until cleanup completes, agents must not assume a `.claude/worktrees/*` branch is current production truth. The only current live source is:
 
-`/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP` on `main`; app-code baseline `6881da4`, deployed control-doc baseline `d364cd8`.
+`/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP` on `main`; app-code baseline `6881da4`, deployed control-doc baseline `3bbb4d8`.
