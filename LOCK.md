@@ -1,8 +1,8 @@
 # LOCK — A7 Render + Environment Stabilization
 
-Owner: Codex 5.5 / Cydon  
-Started: 2026-05-16 20:05 CDT  
-Expected release: After A7 environment manifest, worktree inventory, pending infra decision, and next owner assignment are recorded.  
+Owner: Codex 5.5 / Cydon
+Started: 2026-05-16 20:05 CDT
+Expected release: After A7 environment manifest, worktree inventory, pending infra decision, and next owner assignment are recorded.
 Files/folders:
 - `ENVIRONMENT_MANIFEST.md`
 - `LOCK.md`
@@ -27,7 +27,9 @@ Rules while active:
 - Every A7 change must state files touched, tests run, deployment target, and migration status.
 
 Latest output:
-- A7 environment manifest created.
-- Worktree inventory created.
-- Codex handoff updated.
-
+- Dedicated Vercel project `arrowhead7` created.
+- Production env names migrated from `bonner-ai-services` to `arrowhead7` without printing raw values.
+- Production deployment `dpl_4N3EPd75bQM69JcXSYds98n2JKsF` is READY.
+- `arrowhead7.ai` and `www.arrowhead7.ai` are attached to Vercel project `arrowhead7`.
+- Public smoke returned 200 for `/`, `/terms`, `/auth/login`, `/editor?renderProvider=a7_engine`.
+- Supabase dedicated prod/staging migration remains gated by billing/org/password/data-migration handling.

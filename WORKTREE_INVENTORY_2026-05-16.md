@@ -1,7 +1,7 @@
 # A7 Worktree Inventory — 2026-05-16
 
-Status: READ-ONLY INVENTORY  
-Owner: Codex 5.5 / Cydon  
+Status: READ-ONLY INVENTORY
+Owner: Codex 5.5 / Cydon
 Purpose: give Guardian, Hermes, Codex, and Claude Code one shared view of the current A7 branch/worktree sprawl before cleanup or further build work.
 
 No worktrees or branches were deleted.
@@ -10,10 +10,11 @@ No worktrees or branches were deleted.
 
 - Canonical worktree: `/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP`
 - Canonical branch: `main`
-- Canonical commit: `6881da4 fix(render): harden pipeline status and exports`
+- Current deployed source commit: `d364cd8 docs: add A7 environment control docs`
+- Current app-code baseline: `6881da4 fix(render): harden pipeline status and exports`
 - Worktrees reported by `git worktree list`: 42 total including main
 - Branch lines containing `claude/`: 51 local/remote branch refs
-- Active production project: Vercel `bonner-ai-services`
+- Active production project: Vercel `arrowhead7`
 - Production source should be treated as `main` only.
 
 ## Merge / Keep Signals
@@ -67,5 +68,4 @@ Required before cleanup:
 
 Until cleanup completes, agents must not assume a `.claude/worktrees/*` branch is current production truth. The only current live source is:
 
-`/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP` on `main` at `6881da4`.
-
+`/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP` on `main`; app-code baseline `6881da4`, deployed control-doc baseline `d364cd8`.

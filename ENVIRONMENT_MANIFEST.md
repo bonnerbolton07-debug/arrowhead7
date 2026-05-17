@@ -1,7 +1,7 @@
 # A7 Environment Manifest
 
-Status: ACTIVE CONTROL DOCUMENT  
-Last verified: 2026-05-16 20:05 CDT  
+Status: ACTIVE CONTROL DOCUMENT
+Last verified: 2026-05-16 20:29 CDT
 Owner: Guardian approves infrastructure; Codex/Claude Code implement only with Bonner/Guardian gate approval; Hermes verifies and mirrors status.
 
 This file is intentionally non-secret. Do not add API keys, tokens, passwords, webhook secrets, service-role values, OAuth secrets, or raw provider values.
@@ -12,21 +12,24 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Canonical repo path: `/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP`
 - Git remote: `https://github.com/bonnerbolton07-debug/arrowhead7.git`
 - Branch: `main`
-- Current source commit: `6881da4 fix(render): harden pipeline status and exports`
+- Current deployed source commit: `d364cd8 docs: add A7 environment control docs`
+- Current app-code baseline: `6881da4 fix(render): harden pipeline status and exports`
 - Current live domain: `https://arrowhead7.ai`
 - Current `www` domain: `https://www.arrowhead7.ai`
 
 ## Current Vercel State
 
 - Current Vercel team/scope: `bonnerbolton07-debugs-projects`
-- Current Vercel project: `bonner-ai-services`
-- Current deployment id: `dpl_8dLgunv1CFLSa6v9xqmD6B9uUVQT`
-- Current deployment URL: `https://bonner-ai-services-ngs9g4cdy-bonnerbolton07-debugs-projects.vercel.app`
+- Current Vercel project: `arrowhead7`
+- Current Vercel project id: `prj_0e4McTccad8sEv2U6fVUkiXcoCgg`
+- Previous Vercel container: `bonner-ai-services`
+- Current deployment id: `dpl_4N3EPd75bQM69JcXSYds98n2JKsF`
+- Current deployment URL: `https://arrowhead7-ms42rwcy8-bonnerbolton07-debugs-projects.vercel.app`
 - Current aliases:
   - `https://arrowhead7.ai`
   - `https://www.arrowhead7.ai`
-  - `https://bonner-ai-services.vercel.app`
-  - `https://bonner-ai-services-bonnerbolton07-debugs-projects.vercel.app`
+  - `https://arrowhead7.vercel.app`
+  - `https://arrowhead7-bonnerbolton07-debugs-projects.vercel.app`
 
 ### Current Vercel Env Names
 
@@ -73,15 +76,15 @@ A7 should move to dedicated, clearly named infrastructure before private beta.
 
 ### Vercel
 
-- Production project: `arrowhead7` or `arrowhead7-app`
+- Production project: `arrowhead7` — created and live
 - Preview/staging project or branch environment: `arrowhead7-staging`
 - Domains should point only to the project that owns the live A7 release.
 - Git integration should point to `bonnerbolton07-debug/arrowhead7`.
 
 ### Supabase
 
-- Production project: `arrowhead7-prod`
-- Staging project: `arrowhead7-staging`
+- Production project: `arrowhead7-prod` — not created/migrated yet
+- Staging project: `arrowhead7-staging` — not created/migrated yet
 - Migration history must match tracked repo migrations.
 - No staging/dev/preview env may point at production Supabase.
 
@@ -108,11 +111,11 @@ Bonner/Guardian approval required before any of the following:
 
 A7 is not ready for broad beta until:
 
-- Dedicated A7 Vercel/Supabase ownership is confirmed or migrated.
+- Dedicated A7 Vercel ownership is migrated.
+- Dedicated A7 Supabase ownership is confirmed or migrated.
 - Pending render hardening migration is applied to the correct A7 Supabase project.
 - Captions R2-key ownership validation is patched.
 - Generic URL import SSRF controls are patched.
 - Render worker/queue architecture replaces synchronous long-running native renders.
 - Provider/render diagnostics are persisted without exposing raw provider errors or secrets.
 - Bonner completes authenticated founder E2E on live app.
-
