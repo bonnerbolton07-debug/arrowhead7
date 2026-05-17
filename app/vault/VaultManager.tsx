@@ -120,6 +120,13 @@ export function VaultManager({
   const [icloudBusy, setIcloudBusy] = useState(false);
   const [icloudError, setIcloudError] = useState<string | null>(null);
   const [providerSetup, setProviderSetup] = useState(DEFAULT_PROVIDER_SETUP);
+  const connectedCloudSources = useMemo(
+    () =>
+      connections.filter(
+        (c) => c.provider === 'google_drive' || c.provider === 'dropbox'
+      ),
+    [connections]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -543,20 +550,24 @@ export function VaultManager({
             </div>
           </details>
         </div>
-        {showImport && connections.length > 0 && (
+        {showImport && connectedCloudSources.length > 0 && (
           <div className="mt-4">
             <VaultBrowser
-              connected={connections.reduce(
+              connected={connectedCloudSources.reduce(
                 (acc, c) => {
                   acc[c.provider as 'google_drive' | 'dropbox'] = { account: c.account };
                   return acc;
                 },
                 {} as Record<'google_drive' | 'dropbox', { account: string }>
               )}
+              onImported={(file) => {
+                if (file?.folder) setFolder(file.folder);
+                void refresh();
+              }}
             />
           </div>
         )}
-        {showImport && connections.length === 0 && (
+        {showImport && connectedCloudSources.length === 0 && (
           <div
             className="mt-4 rounded-lg p-6 text-center"
             style={{

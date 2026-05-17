@@ -18,8 +18,10 @@ import {
   registerVaultFile,
   kindForContentType,
   defaultFolderForKind,
+  mimeFromFilename,
   type VaultFolder,
 } from '@/lib/vault';
+import { vaultImportResponse } from '@/lib/vault/import-response';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -39,15 +41,23 @@ export async function POST(request: NextRequest) {
     const { accessToken } = await getValidDriveAccessToken(user.id);
     const meta = await getDriveFile({ accessToken, fileId });
 
-    const fallbackContentType = meta.mimeType || 'application/octet-stream';
+    const metaContentType =
+      meta.mimeType && meta.mimeType !== 'application/octet-stream'
+        ? meta.mimeType
+        : mimeFromFilename(meta.name);
+    const fallbackContentType = metaContentType || 'application/octet-stream';
     const kind = kindForContentType(fallbackContentType);
     const folder: VaultFolder = body.folder ?? defaultFolderForKind(kind);
     const r2Key = reserveVaultKey(user.id, folder, meta.name);
 
     const { stream, contentType } = await downloadDriveFile({ accessToken, fileId });
+    const effectiveContentType =
+      contentType && contentType !== 'application/octet-stream'
+        ? contentType
+        : fallbackContentType;
     const out = await streamToR2({
       key: r2Key,
-      contentType: contentType || fallbackContentType,
+      contentType: effectiveContentType,
       stream,
     });
 
@@ -69,7 +79,15 @@ export async function POST(request: NextRequest) {
         : null,
     });
 
-    return NextResponse.json({ key: r2Key, file });
+    return NextResponse.json(
+      vaultImportResponse({
+        key: r2Key,
+        file,
+        fallbackName: meta.name,
+        fallbackSize: out.bytes,
+        fallbackContentType: effectiveContentType,
+      })
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

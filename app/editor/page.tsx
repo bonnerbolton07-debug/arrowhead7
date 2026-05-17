@@ -1040,7 +1040,7 @@ function EditorPageInner() {
         return;
       }
       const importedKind = inferKindFromMime(src.mimeType);
-      const targetEditId = editId ?? src.editId;
+      const targetEditId = editId ?? src.editId ?? makeUuid();
       setFootageError(null);
       if (importedKind === 'video') setFootageR2Key(src.key);
       setEditId(targetEditId);

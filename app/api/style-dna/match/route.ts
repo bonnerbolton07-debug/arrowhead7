@@ -270,7 +270,8 @@ export async function POST(request: NextRequest) {
     const { error: updateError } = await supabase
       .from('edits')
       .update({ render_config: renderConfig, status: 'ready' })
-      .eq('id', editId);
+      .eq('id', editId)
+      .eq('user_id', user.id);
     if (updateError) {
       console.error('[style-dna/match] failed to persist render config', {
         editId,

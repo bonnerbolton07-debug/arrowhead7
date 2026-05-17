@@ -33,13 +33,16 @@ export async function GET() {
       .from('cloud_connections')
       .select('provider, account_email, account_name, connection_status, updated_at')
       .eq('user_id', user.id)
+      .eq('connection_status', 'connected')
       .order('updated_at', { ascending: false });
 
-    const connections = (data ?? []).map((c) => ({
-      provider: c.provider,
-      account: c.account_email ?? c.account_name ?? 'Connected',
-      status: c.connection_status,
-    }));
+    const connections = (data ?? [])
+      .filter((c) => c.provider === 'google_drive' || c.provider === 'dropbox' || c.provider === 'icloud')
+      .map((c) => ({
+        provider: c.provider,
+        account: c.account_email ?? c.account_name ?? 'Connected',
+        status: c.connection_status,
+      }));
     return NextResponse.json({ connections, setup: providerSetup() });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {

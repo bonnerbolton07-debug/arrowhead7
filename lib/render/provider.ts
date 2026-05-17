@@ -9,7 +9,7 @@ export function selectedRenderProvider(input: {
   envProvider?: unknown;
   requestProvider?: unknown;
 }): RenderProvider {
-  const candidate = String(input.envProvider ?? input.requestProvider ?? 'auto').toLowerCase();
+  const candidate = String(input.requestProvider ?? input.envProvider ?? 'auto').toLowerCase();
   if (candidate === 'a7_engine' || candidate === 'shotstack' || candidate === 'auto') {
     return candidate;
   }

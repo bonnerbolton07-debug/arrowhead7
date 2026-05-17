@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
+import type { VaultFile } from '@/lib/vault';
 
 interface ConnectedMap {
   google_drive?: { account: string };
@@ -67,7 +68,13 @@ function formatDuration(ms?: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
+export function VaultBrowser({
+  connected,
+  onImported,
+}: {
+  connected: ConnectedMap;
+  onImported?: (file: VaultFile | null) => void;
+}) {
   const providers = Object.keys(connected) as Provider[];
   const [provider, setProvider] = useState<Provider | null>(
     providers[0] ?? null
@@ -187,6 +194,7 @@ export function VaultBrowser({ connected }: { connected: ConnectedMap }) {
       }
       const data = await res.json();
       setImportedKeys((m) => ({ ...m, [item.id]: data.key }));
+      onImported?.((data.file ?? null) as VaultFile | null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'import_failed');
     } finally {

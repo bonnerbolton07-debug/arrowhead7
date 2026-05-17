@@ -18,6 +18,7 @@ import {
   defaultFolderForKind,
   type VaultFolder,
 } from '@/lib/vault';
+import { vaultImportResponse } from '@/lib/vault/import-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -84,7 +85,15 @@ export async function POST(request: NextRequest) {
       // Non-fatal — connection row is cosmetic.
     }
 
-    return NextResponse.json({ key: r2Key, file });
+    return NextResponse.json(
+      vaultImportResponse({
+        key: r2Key,
+        file,
+        fallbackName: filename,
+        fallbackSize: out.bytes,
+        fallbackContentType: out.contentType,
+      })
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

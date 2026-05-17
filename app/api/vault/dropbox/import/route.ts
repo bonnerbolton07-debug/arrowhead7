@@ -18,6 +18,7 @@ import {
   defaultFolderForKind,
   type VaultFolder,
 } from '@/lib/vault';
+import { vaultImportResponse } from '@/lib/vault/import-response';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -56,7 +57,15 @@ export async function POST(request: NextRequest) {
       metadata: { dropbox_path: path },
     });
 
-    return NextResponse.json({ key: r2Key, file });
+    return NextResponse.json(
+      vaultImportResponse({
+        key: r2Key,
+        file,
+        fallbackName: filename,
+        fallbackSize: out.bytes,
+        fallbackContentType: out.contentType,
+      })
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';
     if (msg === 'Unauthorized') {

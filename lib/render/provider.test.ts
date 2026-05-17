@@ -14,8 +14,8 @@ describe('render provider selection', () => {
     expect(selectedRenderProvider({ requestProvider: 'a7_engine' })).toBe('a7_engine');
   });
 
-  it('lets environment configuration override client requests', () => {
-    expect(selectedRenderProvider({ envProvider: 'shotstack', requestProvider: 'a7_engine' })).toBe('shotstack');
+  it('lets explicit founder test requests override environment defaults', () => {
+    expect(selectedRenderProvider({ envProvider: 'shotstack', requestProvider: 'a7_engine' })).toBe('a7_engine');
   });
 
   it('falls back to auto for invalid provider values', () => {

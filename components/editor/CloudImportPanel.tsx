@@ -17,7 +17,7 @@ import {
 export type CloudProviderId = 'google_drive' | 'dropbox' | 'icloud' | 'url';
 
 export interface ImportedSource {
-  editId: string;
+  editId?: string | null;
   key: string;
   name: string;
   size: number;
