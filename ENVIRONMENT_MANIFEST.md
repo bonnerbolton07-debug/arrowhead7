@@ -23,9 +23,9 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Current Vercel project: `arrowhead7`
 - Current Vercel project id: `prj_0e4McTccad8sEv2U6fVUkiXcoCgg`
 - Previous Vercel container: `bonner-ai-services`
-- Last verified production deployment id: `dpl_4uohwHHvLYQoczLQdaAkC4mSLz7t`
-- Last verified production deployment URL: `https://arrowhead7-p1i3sxnuf-bonnerbolton07-debugs-projects.vercel.app`
-- Use `vercel inspect https://arrowhead7.ai` for the current deployment id after any new `main` push.
+- Current production deployment is intentionally not hardcoded here because
+  Git-connected `main` pushes create new Vercel deployments. Use
+  `vercel inspect https://arrowhead7.ai` for the current deployment id.
 - Current aliases:
   - `https://arrowhead7.ai`
   - `https://www.arrowhead7.ai`

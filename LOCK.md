@@ -29,7 +29,7 @@ Rules while active:
 Latest output:
 - Dedicated Vercel project `arrowhead7` created.
 - Production env names migrated from `bonner-ai-services` to `arrowhead7` without printing raw values.
-- Gap-closure production deployment `dpl_4uohwHHvLYQoczLQdaAkC4mSLz7t` is READY.
+- Git-connected production deployments are READY on `arrowhead7.ai`; use `vercel inspect https://arrowhead7.ai` for the current deployment id.
 - `arrowhead7.ai` and `www.arrowhead7.ai` are attached to Vercel project `arrowhead7`.
 - Public smoke returned 200 for `/`, `/terms`, `/auth/login`, `/editor?renderProvider=a7_engine`.
 - Dedicated Supabase projects `arrowhead7-prod` and `arrowhead7-staging` are created, migrated, and API-smoked.
