@@ -41,6 +41,12 @@ const PROVIDER_META: Record<
   icloud: { name: 'iCloud Drive', Icon: ICloudIcon, shareLink: true },
 };
 
+const DEFAULT_PROVIDER_SETUP: Record<string, boolean> = {
+  google_drive: false,
+  dropbox: false,
+  icloud: true,
+};
+
 const ALLOWED = new Set([
   'video/mp4',
   'video/quicktime',
@@ -113,6 +119,29 @@ export function VaultManager({
   const [icloudUrl, setIcloudUrl] = useState('');
   const [icloudBusy, setIcloudBusy] = useState(false);
   const [icloudError, setIcloudError] = useState<string | null>(null);
+  const [providerSetup, setProviderSetup] = useState(DEFAULT_PROVIDER_SETUP);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/vault/connections', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setProviderSetup({
+          google_drive: !!data.setup?.google_drive_configured,
+          dropbox: !!data.setup?.dropbox_configured,
+          icloud: true,
+        });
+      } catch {
+        // keep conservative defaults
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -393,14 +422,19 @@ export function VaultManager({
           {Object.entries(PROVIDER_META).map(([id, meta]) => {
             const conn = connections.find((c) => c.provider === id);
             const connected = !!conn;
+            const configured = providerSetup[id] ?? false;
             const href = meta.oauthSlug
-              ? `/api/auth/${meta.oauthSlug}/connect?next=/vault`
+              ? configured
+                ? `/api/auth/${meta.oauthSlug}/connect?next=/vault`
+                : undefined
               : undefined;
             const subtitle = connected
               ? conn?.account
               : meta.shareLink
               ? 'Paste an iCloud share link below'
-              : 'Not connected';
+              : configured
+              ? 'Not connected'
+              : 'Provider setup needed';
             return (
               <div
                 key={id}
@@ -444,6 +478,13 @@ export function VaultManager({
                     style={{ border: '1px solid rgba(245,240,232,0.08)', color: 'rgba(245,240,232,0.5)' }}
                   >
                     Share link
+                  </span>
+                ) : !configured ? (
+                  <span
+                    className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full"
+                    style={{ border: '1px solid rgba(212,148,74,0.2)', color: '#D4944A' }}
+                  >
+                    Setup needed
                   </span>
                 ) : (
                   <span className="text-xs text-a7-text/30">—</span>

@@ -72,7 +72,14 @@ export function CloudImportPanel({ onImported, className }: Props) {
   const [providers, setProviders] = useState<{
     google_drive: boolean;
     dropbox: boolean;
-  }>({ google_drive: false, dropbox: false });
+    google_drive_configured: boolean;
+    dropbox_configured: boolean;
+  }>({
+    google_drive: false,
+    dropbox: false,
+    google_drive_configured: false,
+    dropbox_configured: false,
+  });
   const [provider, setProvider] = useState<CloudProviderId>('google_drive');
   const [loadingProviders, setLoadingProviders] = useState(true);
 
@@ -97,6 +104,8 @@ export function CloudImportPanel({ onImported, className }: Props) {
           setProviders({
             google_drive: !!data.google_drive,
             dropbox: !!data.dropbox,
+            google_drive_configured: !!data.google_drive_configured,
+            dropbox_configured: !!data.dropbox_configured,
           });
           // Default to first connected provider when present.
           if (data.google_drive) setProvider('google_drive');
@@ -169,7 +178,10 @@ export function CloudImportPanel({ onImported, className }: Props) {
   }
 
   useEffect(() => {
-    if (provider === 'google_drive' || provider === 'dropbox') {
+    if (
+      (provider === 'google_drive' && driveReady) ||
+      (provider === 'dropbox' && dropboxReady)
+    ) {
       setStack([]);
       loadFolder(undefined);
     } else {
@@ -248,10 +260,18 @@ export function CloudImportPanel({ onImported, className }: Props) {
 
   const driveReady = providers.google_drive;
   const dropboxReady = providers.dropbox;
+  const driveConfigured = providers.google_drive_configured;
+  const dropboxConfigured = providers.dropbox_configured;
   const browsing = provider === 'google_drive' || provider === 'dropbox';
   const showBrowserNotConnected =
     (provider === 'google_drive' && !driveReady) ||
     (provider === 'dropbox' && !dropboxReady);
+  const browserConfigured =
+    provider === 'google_drive'
+      ? driveConfigured
+      : provider === 'dropbox'
+      ? dropboxConfigured
+      : true;
 
   return (
     <div
@@ -322,6 +342,7 @@ export function CloudImportPanel({ onImported, className }: Props) {
       {browsing && showBrowserNotConnected && (
         <NotConnectedHint
           provider={provider}
+          configured={browserConfigured}
           onConnect={() => {
             const slug = provider === 'google_drive' ? 'google-drive' : 'dropbox';
             window.location.href = `/api/auth/${slug}/connect?next=/editor`;
@@ -449,9 +470,11 @@ function ProviderTab({
 
 function NotConnectedHint({
   provider,
+  configured,
   onConnect,
 }: {
   provider: CloudProviderId;
+  configured: boolean;
   onConnect: () => void;
 }) {
   const name = provider === 'google_drive' ? 'Google Drive' : 'Dropbox';
@@ -464,13 +487,23 @@ function NotConnectedHint({
         color: 'rgba(245,240,232,0.6)',
       }}
     >
-      <p className="mb-3">Connect {name} to browse and pull videos directly into your vault.</p>
+      <p className="mb-3">
+        {configured
+          ? `Connect ${name} to browse and pull videos directly into your vault.`
+          : `${name} OAuth is not configured on this A7 environment yet. Use direct upload, iCloud share link, or direct media URL for now.`}
+      </p>
       <button
         onClick={onConnect}
+        disabled={!configured}
         className="px-3 py-1.5 rounded-md text-xs font-medium text-a7-void"
-        style={{ background: 'linear-gradient(135deg, #1a9e8f, #2DD4BF)' }}
+        style={{
+          background: configured
+            ? 'linear-gradient(135deg, #1a9e8f, #2DD4BF)'
+            : 'rgba(245,240,232,0.08)',
+          color: configured ? '#0A0A0A' : 'rgba(245,240,232,0.45)',
+        }}
       >
-        Connect {name}
+        {configured ? `Connect ${name}` : 'Provider setup needed'}
       </button>
     </div>
   );

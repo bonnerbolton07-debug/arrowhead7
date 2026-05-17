@@ -9,6 +9,18 @@ import { requireUser, createServerSupabaseClient } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
+function providerSetup() {
+  return {
+    google_drive_configured: Boolean(
+      process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+    ),
+    dropbox_configured: Boolean(
+      process.env.DROPBOX_APP_KEY && process.env.DROPBOX_APP_SECRET
+    ),
+    icloud_share_link: true,
+  };
+}
+
 export async function GET() {
   try {
     const user = await requireUser();
@@ -24,7 +36,7 @@ export async function GET() {
       account: c.account_email ?? c.account_name ?? 'Connected',
       status: c.connection_status,
     }));
-    return NextResponse.json({ connections });
+    return NextResponse.json({ connections, setup: providerSetup() });
   } catch (error) {
     if (error instanceof Error && error.message === 'Unauthorized') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

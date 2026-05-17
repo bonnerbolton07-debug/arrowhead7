@@ -467,7 +467,7 @@ const PROVIDERS = [
   {
     id: 'icloud',
     name: 'iCloud Drive',
-    desc: 'Browse footage from your Apple devices.',
+    desc: 'Use public share links from Files.app or icloud.com.',
     Icon: ICloudIcon,
     oauthSlug: undefined,
   },
@@ -484,6 +484,12 @@ function SourcesStep({
   onNext: () => Promise<void> | void;
   onBack: () => void;
 }) {
+  const [providerSetup, setProviderSetup] = useState({
+    google_drive: false,
+    dropbox: false,
+    icloud: true,
+  });
+
   // Re-pull connection state on mount and whenever the tab regains focus —
   // covers the round-trip back from an OAuth provider's consent screen.
   useEffect(() => {
@@ -493,8 +499,18 @@ function SourcesStep({
         if (!res.ok) return;
         const data = (await res.json()) as {
           connections: { provider: string; account: string }[];
+          setup?: {
+            google_drive_configured?: boolean;
+            dropbox_configured?: boolean;
+            icloud_share_link?: boolean;
+          };
         };
         onConnectionsChange(data.connections);
+        setProviderSetup({
+          google_drive: !!data.setup?.google_drive_configured,
+          dropbox: !!data.setup?.dropbox_configured,
+          icloud: true,
+        });
       } catch {
         // ignore
       }
@@ -518,8 +534,11 @@ function SourcesStep({
         {PROVIDERS.map((p) => {
           const connected = connectedSet.has(p.id);
           const account = connections.find((c) => c.provider === p.id)?.account;
+          const configured = providerSetup[p.id] ?? false;
           const href = p.oauthSlug
-            ? `/api/auth/${p.oauthSlug}/connect?next=/onboarding`
+            ? configured
+              ? `/api/auth/${p.oauthSlug}/connect?next=/onboarding`
+              : undefined
             : undefined;
           return (
             <div
@@ -563,12 +582,19 @@ function SourcesStep({
                 >
                   Connect
                 </a>
-              ) : (
+              ) : p.id === 'icloud' ? (
                 <span
                   className="px-3 py-1.5 rounded-md text-xs text-a7-text/40"
                   style={{ border: '1px solid rgba(245,240,232,0.06)' }}
                 >
-                  Coming soon
+                  Share link
+                </span>
+              ) : (
+                <span
+                  className="px-3 py-1.5 rounded-md text-xs text-a7-text/40"
+                  style={{ border: '1px solid rgba(212,148,74,0.18)', color: '#D4944A' }}
+                >
+                  Setup needed
                 </span>
               )}
             </div>

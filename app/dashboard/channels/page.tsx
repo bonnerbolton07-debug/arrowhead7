@@ -57,6 +57,10 @@ interface SearchParams {
 const ERROR_MAP: Record<string, string> = {
   access_denied: 'You denied access. No connection was made.',
   invalid_state: 'Session expired. Please try again.',
+  provider_setup_google_drive:
+    'Google Drive is not connected yet because A7 needs Google OAuth credentials in production.',
+  provider_setup_dropbox:
+    'Dropbox is not connected yet because A7 needs Dropbox OAuth credentials in production.',
 };
 
 const CONNECTED_PROVIDERS = new Set([
