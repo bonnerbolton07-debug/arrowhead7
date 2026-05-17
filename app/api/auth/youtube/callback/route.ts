@@ -3,13 +3,13 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/supabase/server';
 import {
   exchangeYouTubeCode,
   fetchYouTubeChannel,
 } from '@/lib/distribute/youtube';
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
+import { resolveOAuthCallbackUser } from '@/lib/oauth/callback-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
     await readAndClearState('youtube');
   const fail = (msg: string) =>
     NextResponse.redirect(
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
 
   try {
-    const user = await requireUser();
+    const user = await resolveOAuthCallbackUser(userId);
     const redirectUri = storedRedirect ?? getRedirectUri('youtube', request);
     const tokens = await exchangeYouTubeCode(code, 'youtube', redirectUri);
     const channel = await fetchYouTubeChannel(tokens.access_token);

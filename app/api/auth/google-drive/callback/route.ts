@@ -3,7 +3,6 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/supabase/server';
 import {
   exchangeGoogleCode,
   fetchGoogleUserInfo,
@@ -11,6 +10,8 @@ import {
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
 import { ensureProfileForUser } from '@/lib/supabase/profile';
+import { resolveOAuthCallbackUser, userTail } from '@/lib/oauth/callback-user';
+import { logOAuthEvent, oauthErrorCode } from '@/lib/oauth/log';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,20 +21,39 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
     await readAndClearState('google-drive');
+  logOAuthEvent('google_drive', 'callback_received', {
+    hasCode: Boolean(code),
+    hasState: Boolean(receivedState),
+    hasStoredState: Boolean(expectedState),
+    hasStoredUser: Boolean(userId),
+    userTail: userTail(userId),
+  });
 
   const fail = (msg: string) =>
     NextResponse.redirect(
       new URL(`${nextPath}?error=${encodeURIComponent(msg)}`, request.url)
     );
 
-  if (providerError) return fail(providerError);
-  if (!code) return fail('missing_code');
-  if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
+  if (providerError) {
+    logOAuthEvent('google_drive', 'provider_error', { providerError });
+    return fail(providerError);
+  }
+  if (!code) {
+    logOAuthEvent('google_drive', 'missing_code');
+    return fail('missing_code');
+  }
+  if (!verifyState(expectedState, receivedState)) {
+    logOAuthEvent('google_drive', 'invalid_state', {
+      hasStoredState: Boolean(expectedState),
+      hasReceivedState: Boolean(receivedState),
+    });
+    return fail('invalid_state');
+  }
 
   try {
-    const user = await requireUser();
+    const user = await resolveOAuthCallbackUser(userId);
     await ensureProfileForUser(user);
     // Reuse the EXACT redirect_uri sent at /authorize time. Google enforces
     // a byte-for-byte match between authorize and token requests; falling
@@ -53,14 +73,24 @@ export async function GET(request: NextRequest) {
       tokens,
     });
 
+    logOAuthEvent('google_drive', 'connection_saved', {
+      userTail: userTail(user.id),
+      hasAccountId: Boolean(info.id),
+      hasEmail: Boolean(info.email),
+    });
+
     return NextResponse.redirect(
       new URL(`${nextPath}?connected=google_drive`, request.url)
     );
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'oauth_failed';
+    const msg = oauthErrorCode(e);
+    logOAuthEvent('google_drive', 'callback_failed', {
+      error: msg === 'Unauthorized' ? 'Unauthorized' : 'cloud_connection_failed',
+      userTail: userTail(userId),
+    });
     if (msg === 'Unauthorized') {
       return NextResponse.redirect(new URL('/auth/login', request.url));
     }
-    return fail(msg);
+    return fail('cloud_connection_failed');
   }
 }

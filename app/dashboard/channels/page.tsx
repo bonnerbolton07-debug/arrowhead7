@@ -61,6 +61,8 @@ const ERROR_MAP: Record<string, string> = {
     'Google Drive is not connected yet because A7 needs Google OAuth credentials in production.',
   provider_setup_dropbox:
     'Dropbox is not connected yet because A7 needs Dropbox OAuth credentials in production.',
+  cloud_connection_failed:
+    'A7 could not finish saving that connection. Please try reconnecting once.',
 };
 
 const CONNECTED_PROVIDERS = new Set([

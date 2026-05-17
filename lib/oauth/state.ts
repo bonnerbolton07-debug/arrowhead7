@@ -18,6 +18,7 @@ const STATE_COOKIE_PREFIX = 'a7_oauth_state__';
 const PKCE_COOKIE_PREFIX = 'a7_oauth_pkce__';
 const NEXT_COOKIE_PREFIX = 'a7_oauth_next__';
 const REDIRECT_COOKIE_PREFIX = 'a7_oauth_redirect__';
+const USER_COOKIE_PREFIX = 'a7_oauth_user__';
 const MAX_AGE_SECONDS = 600;
 
 function cookieOpts(maxAge = MAX_AGE_SECONDS) {
@@ -43,11 +44,51 @@ export function generatePkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
+function signingSecret(): string {
+  const secret =
+    process.env.TOKEN_ENCRYPTION_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.GOOGLE_CLIENT_SECRET ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!secret) {
+    throw new Error('OAuth state signing secret not configured');
+  }
+  return secret;
+}
+
+function signUserId(userId: string): string {
+  const sig = crypto
+    .createHmac('sha256', signingSecret())
+    .update(userId)
+    .digest('base64url');
+  return `${userId}.${sig}`;
+}
+
+function verifySignedUserId(value: string | undefined): string | null {
+  if (!value) return null;
+  const splitAt = value.lastIndexOf('.');
+  if (splitAt <= 0) return null;
+
+  const userId = value.slice(0, splitAt);
+  const received = value.slice(splitAt + 1);
+  const expected = signUserId(userId).slice(splitAt + 1);
+
+  try {
+    const receivedBuf = Buffer.from(received);
+    const expectedBuf = Buffer.from(expected);
+    if (receivedBuf.length !== expectedBuf.length) return null;
+    return crypto.timingSafeEqual(receivedBuf, expectedBuf) ? userId : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function setStateCookie(
   provider: string,
   state: string,
   nextPath?: string,
-  redirectUri?: string
+  redirectUri?: string,
+  userId?: string
 ): Promise<void> {
   const jar = await cookies();
   jar.set(STATE_COOKIE_PREFIX + provider, state, cookieOpts());
@@ -58,6 +99,9 @@ export async function setStateCookie(
     // Persist the exact redirect URI we asked the provider to call back to,
     // so the callback step uses the same string when exchanging the code.
     jar.set(REDIRECT_COOKIE_PREFIX + provider, redirectUri, cookieOpts());
+  }
+  if (userId) {
+    jar.set(USER_COOKIE_PREFIX + provider, signUserId(userId), cookieOpts());
   }
 }
 
@@ -74,12 +118,14 @@ export async function readAndClearState(provider: string): Promise<{
   verifier: string | null;
   nextPath: string;
   redirectUri: string | null;
+  userId: string | null;
 }> {
   const jar = await cookies();
   const state = jar.get(STATE_COOKIE_PREFIX + provider)?.value ?? null;
   const verifier = jar.get(PKCE_COOKIE_PREFIX + provider)?.value ?? null;
   const nextRaw = jar.get(NEXT_COOKIE_PREFIX + provider)?.value;
   const redirectUri = jar.get(REDIRECT_COOKIE_PREFIX + provider)?.value ?? null;
+  const userId = verifySignedUserId(jar.get(USER_COOKIE_PREFIX + provider)?.value);
   const nextPath =
     nextRaw && nextRaw.startsWith('/') ? nextRaw : '/dashboard/channels';
 
@@ -88,8 +134,9 @@ export async function readAndClearState(provider: string): Promise<{
   jar.set(PKCE_COOKIE_PREFIX + provider, '', cookieOpts(0));
   jar.set(NEXT_COOKIE_PREFIX + provider, '', cookieOpts(0));
   jar.set(REDIRECT_COOKIE_PREFIX + provider, '', cookieOpts(0));
+  jar.set(USER_COOKIE_PREFIX + provider, '', cookieOpts(0));
 
-  return { state, verifier, nextPath, redirectUri };
+  return { state, verifier, nextPath, redirectUri, userId };
 }
 
 export function verifyState(

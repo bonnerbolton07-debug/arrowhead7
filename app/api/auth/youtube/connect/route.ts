@@ -12,13 +12,13 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     googleClientCreds();
     const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('youtube', request);
-    await setStateCookie('youtube', state, nextPath, redirectUri);
+    await setStateCookie('youtube', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildYouTubeAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';

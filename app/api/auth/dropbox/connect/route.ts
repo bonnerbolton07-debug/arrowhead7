@@ -11,12 +11,12 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     dropboxClientCreds();
     const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('dropbox', request);
-    await setStateCookie('dropbox', state, nextPath, redirectUri);
+    await setStateCookie('dropbox', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildDropboxAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';

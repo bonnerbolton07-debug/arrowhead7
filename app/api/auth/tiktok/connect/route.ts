@@ -11,13 +11,13 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     tiktokClientCreds();
     const state = generateState();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('tiktok', request);
-    await setStateCookie('tiktok', state, nextPath, redirectUri);
+    await setStateCookie('tiktok', state, nextPath, redirectUri, user.id);
     return NextResponse.redirect(buildTikTokAuthUrl(state, redirectUri));
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown';

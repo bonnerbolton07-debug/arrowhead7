@@ -15,13 +15,13 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     googleClientCreds(); // throws if env missing
 
     const state = generateState();
     const nextPath = request.nextUrl.searchParams.get('next') || '/vault';
     const redirectUri = getRedirectUri('google-drive', request);
-    await setStateCookie('google-drive', state, nextPath, redirectUri);
+    await setStateCookie('google-drive', state, nextPath, redirectUri, user.id);
 
     const url = buildGoogleAuthUrl({
       provider: 'google-drive',

@@ -3,7 +3,6 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/supabase/server';
 import {
   exchangeInstagramCode,
   exchangeForLongLivedToken,
@@ -11,6 +10,7 @@ import {
 } from '@/lib/distribute/instagram';
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
+import { resolveOAuthCallbackUser } from '@/lib/oauth/callback-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
     await readAndClearState('instagram');
   const fail = (msg: string) =>
     NextResponse.redirect(
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
 
   try {
-    const user = await requireUser();
+    const user = await resolveOAuthCallbackUser(userId);
     const redirectUri = storedRedirect ?? getRedirectUri('instagram', request);
     const shortLived = await exchangeInstagramCode(code, redirectUri);
     const longLived = await exchangeForLongLivedToken(shortLived.access_token);

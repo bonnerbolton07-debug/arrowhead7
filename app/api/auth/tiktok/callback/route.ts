@@ -3,10 +3,10 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/supabase/server';
 import { exchangeTikTokCode, fetchTikTokUser } from '@/lib/distribute/tiktok';
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertChannel } from '@/lib/oauth/store';
+import { resolveOAuthCallbackUser } from '@/lib/oauth/callback-user';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const receivedState = url.searchParams.get('state');
   const providerError = url.searchParams.get('error');
 
-  const { state: expectedState, nextPath, redirectUri: storedRedirect } =
+  const { state: expectedState, nextPath, redirectUri: storedRedirect, userId } =
     await readAndClearState('tiktok');
   const fail = (msg: string) =>
     NextResponse.redirect(
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
   if (!verifyState(expectedState, receivedState)) return fail('invalid_state');
 
   try {
-    const user = await requireUser();
+    const user = await resolveOAuthCallbackUser(userId);
     const redirectUri = storedRedirect ?? getRedirectUri('tiktok', request);
     const tokens = await exchangeTikTokCode(code, redirectUri);
     const info = await fetchTikTokUser(tokens.access_token);

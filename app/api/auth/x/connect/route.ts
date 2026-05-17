@@ -17,14 +17,14 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    await requireUser();
+    const user = await requireUser();
     xClientCreds();
     const state = generateState();
     const { verifier, challenge } = generatePkcePair();
     const nextPath =
       request.nextUrl.searchParams.get('next') || '/dashboard/channels';
     const redirectUri = getRedirectUri('x', request);
-    await setStateCookie('x', state, nextPath, redirectUri);
+    await setStateCookie('x', state, nextPath, redirectUri, user.id);
     await setPkceCookie('x', verifier);
     return NextResponse.redirect(buildXAuthUrl({ state, challenge, redirectUri }));
   } catch (e) {
