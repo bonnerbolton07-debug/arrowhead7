@@ -12,7 +12,7 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Canonical repo path: `/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP`
 - Git remote: `https://github.com/bonnerbolton07-debug/arrowhead7.git`
 - Branch: `main`
-- Current deployed source commit: `abb7795 chore(supabase): provision dedicated A7 databases`
+- Last verified runtime source commit: `86ae884 chore: close A7 environment hardening gaps`
 - Current app-code baseline: `6881da4 fix(render): harden pipeline status and exports`
 - Current live domain: `https://arrowhead7.ai`
 - Current `www` domain: `https://www.arrowhead7.ai`
@@ -23,8 +23,9 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Current Vercel project: `arrowhead7`
 - Current Vercel project id: `prj_0e4McTccad8sEv2U6fVUkiXcoCgg`
 - Previous Vercel container: `bonner-ai-services`
-- Current deployment id: `dpl_5w899MkXFCbLL3nD9EDMA9owPHu9`
-- Current deployment URL: `https://arrowhead7-2a4mhihe2-bonnerbolton07-debugs-projects.vercel.app`
+- Last verified production deployment id: `dpl_4uohwHHvLYQoczLQdaAkC4mSLz7t`
+- Last verified production deployment URL: `https://arrowhead7-p1i3sxnuf-bonnerbolton07-debugs-projects.vercel.app`
+- Use `vercel inspect https://arrowhead7.ai` for the current deployment id after any new `main` push.
 - Current aliases:
   - `https://arrowhead7.ai`
   - `https://www.arrowhead7.ai`
