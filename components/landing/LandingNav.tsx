@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Logo } from '@/components/ui/Logo';
 
@@ -33,9 +34,9 @@ export function LandingNav() {
     >
       <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-a7-teal/15 to-transparent" />
       <div className="max-w-7xl mx-auto flex items-center justify-between px-6 sm:px-8 py-4">
-        <a href="/" className="flex items-center gap-1">
+        <Link href="/" className="flex items-center gap-1">
           <Logo variant="dual" size="sm" wordmark />
-        </a>
+        </Link>
 
         <div className="hidden md:flex items-center gap-7 text-sm">
           {NAV_LINKS.map((link) => (
@@ -50,13 +51,13 @@ export function LandingNav() {
         </div>
 
         <div className="flex items-center gap-3">
-          <a
+          <Link
             href="/auth/login"
             className="hidden sm:inline text-sm text-a7-text/60 hover:text-a7-text transition-colors px-3 py-2"
           >
             Sign in
-          </a>
-          <a
+          </Link>
+          <Link
             href="/auth/signup"
             className="hidden sm:inline-block text-sm px-4 py-2 rounded-md font-medium transition-all text-a7-void"
             style={{
@@ -65,7 +66,7 @@ export function LandingNav() {
             }}
           >
             Get Started
-          </a>
+          </Link>
 
           <button
             type="button"
@@ -128,14 +129,14 @@ export function LandingNav() {
               </a>
             ))}
             <div className="h-px my-4" style={{ background: 'rgba(245,240,232,0.06)' }} />
-            <a
+            <Link
               href="/auth/login"
               onClick={() => setOpen(false)}
               className="text-lg py-3 text-a7-text/70 hover:text-a7-text transition-colors"
             >
               Sign in
-            </a>
-            <a
+            </Link>
+            <Link
               href="/auth/signup"
               onClick={() => setOpen(false)}
               className="mt-3 text-center text-sm px-4 py-3 rounded-md font-medium transition-all text-a7-void"
@@ -145,7 +146,7 @@ export function LandingNav() {
               }}
             >
               Get Started
-            </a>
+            </Link>
           </nav>
         </div>
       )}

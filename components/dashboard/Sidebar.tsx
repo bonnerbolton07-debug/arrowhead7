@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Logo } from '@/components/ui/Logo';
 import {
@@ -59,9 +60,9 @@ export function Sidebar({
         }}
       />
 
-      <a href="/" className="flex items-center gap-2 mb-10">
+      <Link href="/" className="flex items-center gap-2 mb-10">
         <Logo variant="dual" size="sm" wordmark />
-      </a>
+      </Link>
 
       <nav className="space-y-1 flex-1">
         {NAV_ITEMS.map((item) => {
@@ -70,7 +71,7 @@ export function Sidebar({
               ? pathname === '/dashboard'
               : pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
-            <a
+            <Link
               key={item.href}
               href={item.href}
               className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-all relative overflow-hidden ${
@@ -98,13 +99,13 @@ export function Sidebar({
               )}
               <item.Icon size={16} gradient={active ? 'teal' : 'teal'} />
               <span className={active ? 'text-grad-teal' : ''}>{item.label}</span>
-            </a>
+            </Link>
           );
         })}
       </nav>
 
       <div className="space-y-3">
-        <a
+        <Link
           href="/dashboard/settings"
           className="block rounded-lg p-4 relative overflow-hidden transition-all hover:scale-[1.01]"
           style={{
@@ -139,7 +140,7 @@ export function Sidebar({
               Upgrade →
             </div>
           )}
-        </a>
+        </Link>
 
         {userEmail && (
           <div className="space-y-2">

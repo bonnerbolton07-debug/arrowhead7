@@ -1,4 +1,5 @@
 import { Logo } from '@/components/ui/Logo';
+import Link from 'next/link';
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -9,9 +10,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       }} />
       <header className="relative px-8 py-5 border-b border-a7-text/[0.04]">
         <div className="absolute bottom-0 left-8 right-8 h-px bg-gradient-to-r from-transparent via-a7-teal/15 to-transparent" />
-        <a href="/" className="inline-flex items-center gap-1">
+        <Link href="/" className="inline-flex items-center gap-1">
           <Logo variant="dual" size="sm" wordmark />
-        </a>
+        </Link>
       </header>
       <main className="relative z-10 flex-1 flex items-center justify-center px-4 py-12">
         {children}

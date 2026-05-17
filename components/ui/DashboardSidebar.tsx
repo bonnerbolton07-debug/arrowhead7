@@ -5,6 +5,7 @@
 // meter, and sign-out button. Highlight derived from the active route.
 
 import { Logo } from './Logo';
+import Link from 'next/link';
 import type { User } from '@supabase/supabase-js';
 
 interface DashboardSidebarProps {
@@ -54,15 +55,15 @@ export function DashboardSidebar({
         }}
       />
 
-      <a href="/" className="flex items-center gap-2 mb-10">
+      <Link href="/" className="flex items-center gap-2 mb-10">
         <Logo variant="dual" size="sm" wordmark />
-      </a>
+      </Link>
 
       <nav className="space-y-1">
         {NAV_ITEMS.map((item) => {
           const isActive = item.key === active;
           return (
-            <a
+            <Link
               key={item.key}
               href={item.href}
               className={`block px-3 py-2 rounded-md text-sm transition-all relative overflow-hidden ${
@@ -89,7 +90,7 @@ export function DashboardSidebar({
                 />
               )}
               <span className={isActive ? 'text-grad-teal' : ''}>{item.label}</span>
-            </a>
+            </Link>
           );
         })}
       </nav>

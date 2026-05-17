@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Logo } from '@/components/ui/Logo';
+import Link from 'next/link';
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — Arrowhead 7',
@@ -14,12 +15,12 @@ export default function PrivacyPage() {
         style={{ borderBottom: '1px solid rgba(245,240,232,0.04)' }}
       >
         <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <a href="/" className="flex items-center gap-1">
+          <Link href="/" className="flex items-center gap-1">
             <Logo variant="dual" size="sm" wordmark />
-          </a>
-          <a href="/" className="text-sm text-a7-text/50 hover:text-a7-text transition-colors">
+          </Link>
+          <Link href="/" className="text-sm text-a7-text/50 hover:text-a7-text transition-colors">
             &larr; Back home
-          </a>
+          </Link>
         </div>
       </header>
 

@@ -1,4 +1,5 @@
 import { Logo } from '@/components/ui/Logo';
+import Link from 'next/link';
 import { PricingCards } from '@/components/pricing/PricingCards';
 import {
   createServerSupabaseClient,
@@ -66,16 +67,16 @@ export default async function PricingPage({
       >
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-a7-teal/15 to-transparent" />
         <div className="max-w-7xl mx-auto flex items-center justify-between px-6 sm:px-8 py-4">
-          <a href="/" className="flex items-center gap-1">
+          <Link href="/" className="flex items-center gap-1">
             <Logo variant="dual" size="sm" wordmark />
-          </a>
+          </Link>
           <div className="flex items-center gap-3">
-            <a
+            <Link
               href={signedIn ? '/dashboard' : '/auth/login'}
               className="text-sm text-a7-text/60 hover:text-a7-text transition-colors px-3 py-2"
             >
               {signedIn ? 'Dashboard' : 'Sign in'}
-            </a>
+            </Link>
           </div>
         </div>
       </nav>

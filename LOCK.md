@@ -29,9 +29,10 @@ Rules while active:
 Latest output:
 - Dedicated Vercel project `arrowhead7` created.
 - Production env names migrated from `bonner-ai-services` to `arrowhead7` without printing raw values.
-- Production deployment `dpl_J1aUGDTdvWwD22fpS8MARYg2twrQ` is READY.
+- Production deployment `dpl_5w899MkXFCbLL3nD9EDMA9owPHu9` is READY.
 - `arrowhead7.ai` and `www.arrowhead7.ai` are attached to Vercel project `arrowhead7`.
 - Public smoke returned 200 for `/`, `/terms`, `/auth/login`, `/editor?renderProvider=a7_engine`.
 - Dedicated Supabase projects `arrowhead7-prod` and `arrowhead7-staging` are created, migrated, and API-smoked.
-- Vercel production Supabase envs point to `arrowhead7-prod`; Vercel development Supabase envs point to `arrowhead7-staging`.
-- Vercel preview Supabase env remains blocked until the `arrowhead7` Vercel project is connected to the GitHub repo.
+- Vercel production Supabase envs point to `arrowhead7-prod`; Vercel development and preview Supabase envs point to `arrowhead7-staging`.
+- Vercel Git integration is connected to `bonnerbolton07-debug/arrowhead7`, production branch `main`.
+- npm audit is clean for production and full dependency trees after aligning `eslint-config-next` with Next 15.5.18 and overriding PostCSS to the patched 8.5.x line.
