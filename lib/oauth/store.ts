@@ -6,6 +6,7 @@
 // background jobs (cron) can pass a service-role client.
 
 import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { getAdminClient, isAdminConfigured } from '@/lib/supabase/admin';
 import { encryptToken, decryptToken } from '@/lib/crypto/tokens';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -46,7 +47,9 @@ export interface ChannelInput {
 }
 
 async function db(client?: SupabaseClient): Promise<SupabaseClient> {
-  return client ?? ((await createServerSupabaseClient()) as unknown as SupabaseClient);
+  if (client) return client;
+  if (isAdminConfigured()) return getAdminClient();
+  return (await createServerSupabaseClient()) as unknown as SupabaseClient;
 }
 
 function tokenExpiry(expiresIn?: number): string | null {

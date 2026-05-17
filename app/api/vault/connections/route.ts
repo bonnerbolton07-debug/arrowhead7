@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { requireUser, createServerSupabaseClient } from '@/lib/supabase/server';
+import { getAdminClient, isAdminConfigured } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,9 @@ function providerSetup() {
 export async function GET() {
   try {
     const user = await requireUser();
-    const supabase = await createServerSupabaseClient();
+    const supabase = isAdminConfigured()
+      ? getAdminClient()
+      : await createServerSupabaseClient();
     const { data } = await supabase
       .from('cloud_connections')
       .select('provider, account_email, account_name, connection_status, updated_at')

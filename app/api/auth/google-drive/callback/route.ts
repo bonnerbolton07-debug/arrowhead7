@@ -10,6 +10,7 @@ import {
 } from '@/lib/cloud/google-drive';
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
+import { ensureProfileForUser } from '@/lib/supabase/profile';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
+    await ensureProfileForUser(user);
     // Reuse the EXACT redirect_uri sent at /authorize time. Google enforces
     // a byte-for-byte match between authorize and token requests; falling
     // back to a freshly-derived URI here is what produces a mismatch on

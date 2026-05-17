@@ -7,6 +7,7 @@
 
 import { NextResponse } from 'next/server';
 import { getUser, createServerSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { getAdminClient, isAdminConfigured } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,9 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ google_drive: false, dropbox: false, ...setup });
   }
-  const supabase = await createServerSupabaseClient();
+  const supabase = isAdminConfigured()
+    ? getAdminClient()
+    : await createServerSupabaseClient();
   const { data } = await supabase
     .from('cloud_connections')
     .select('provider, connection_status')

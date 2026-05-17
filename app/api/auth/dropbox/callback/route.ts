@@ -7,6 +7,7 @@ import { requireUser } from '@/lib/supabase/server';
 import { exchangeDropboxCode, fetchDropboxAccount } from '@/lib/cloud/dropbox';
 import { getRedirectUri, readAndClearState, verifyState } from '@/lib/oauth/state';
 import { upsertCloudConnection } from '@/lib/oauth/store';
+import { ensureProfileForUser } from '@/lib/supabase/profile';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const user = await requireUser();
+    await ensureProfileForUser(user);
     const redirectUri = storedRedirect ?? getRedirectUri('dropbox', request);
     const tokens = await exchangeDropboxCode(code, redirectUri);
     const account = await fetchDropboxAccount(tokens.access_token);
