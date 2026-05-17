@@ -32,4 +32,6 @@ Latest output:
 - Production deployment `dpl_J1aUGDTdvWwD22fpS8MARYg2twrQ` is READY.
 - `arrowhead7.ai` and `www.arrowhead7.ai` are attached to Vercel project `arrowhead7`.
 - Public smoke returned 200 for `/`, `/terms`, `/auth/login`, `/editor?renderProvider=a7_engine`.
-- Supabase dedicated prod/staging migration remains gated by billing/org/password/data-migration handling.
+- Dedicated Supabase projects `arrowhead7-prod` and `arrowhead7-staging` are created, migrated, and API-smoked.
+- Vercel production Supabase envs point to `arrowhead7-prod`; Vercel development Supabase envs point to `arrowhead7-staging`.
+- Vercel preview Supabase env remains blocked until the `arrowhead7` Vercel project is connected to the GitHub repo.

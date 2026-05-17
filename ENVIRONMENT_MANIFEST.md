@@ -1,7 +1,7 @@
 # A7 Environment Manifest
 
 Status: ACTIVE CONTROL DOCUMENT
-Last verified: 2026-05-16 20:29 CDT
+Last verified: 2026-05-16 21:05 CDT
 Owner: Guardian approves infrastructure; Codex/Claude Code implement only with Bonner/Guardian gate approval; Hermes verifies and mirrors status.
 
 This file is intentionally non-secret. Do not add API keys, tokens, passwords, webhook secrets, service-role values, OAuth secrets, or raw provider values.
@@ -12,7 +12,7 @@ This file is intentionally non-secret. Do not add API keys, tokens, passwords, w
 - Canonical repo path: `/Users/bonnerbolton/ArrowHead7_Command_Vault/A7-APP`
 - Git remote: `https://github.com/bonnerbolton07-debug/arrowhead7.git`
 - Branch: `main`
-- Current deployed source commit: `d364cd8 docs: add A7 environment control docs`
+- Current deployed source commit: `3bbb4d8 docs: record A7 Vercel migration`
 - Current app-code baseline: `6881da4 fix(render): harden pipeline status and exports`
 - Current live domain: `https://arrowhead7.ai`
 - Current `www` domain: `https://www.arrowhead7.ai`
@@ -65,10 +65,19 @@ Values are encrypted in Vercel and must not be pulled into files unless explicit
 ## Current Supabase State
 
 - App code reads Supabase from `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
-- Local Supabase CLI is not linked to a project ref from this repo.
-- `supabase db push --dry-run` previously failed with `Cannot find project ref`.
-- Current Supabase connector visibility in this session lists a project named `Rank Ride Ranch`; it does not expose a clearly named dedicated A7 project.
-- Pending migration: `supabase/migrations/20260516195644_render_pipeline_hardening.sql`
+- Production Supabase project: `arrowhead7-prod` (`daprnsgeljtismownouf`) — created, migrated, and API-smoked.
+- Staging Supabase project: `arrowhead7-staging` (`xhqtiytnxefsoocluqrq`) — created, migrated, and API-smoked.
+- Local Supabase CLI is linked to `arrowhead7-staging` after staging migration; relink to production before production-only DB operations.
+- Vercel production env points to `arrowhead7-prod`.
+- Vercel development env points to `arrowhead7-staging`.
+- Vercel preview env could not be set because project `arrowhead7` does not yet have a connected Git repository.
+- Applied migrations:
+  - `20260516190000_initial_a7_schema.sql`
+  - `20260516193000_user_vault.sql`
+  - `20260516194000_strategy_brain.sql`
+  - `20260516195000_icloud_provider.sql`
+  - `20260516195644_render_pipeline_hardening.sql`
+  - `20260517014954_data_api_grants.sql`
 
 ## Target A7 Environment Model
 
@@ -83,8 +92,8 @@ A7 should move to dedicated, clearly named infrastructure before private beta.
 
 ### Supabase
 
-- Production project: `arrowhead7-prod` — not created/migrated yet
-- Staging project: `arrowhead7-staging` — not created/migrated yet
+- Production project: `arrowhead7-prod` — created and migrated
+- Staging project: `arrowhead7-staging` — created and migrated
 - Migration history must match tracked repo migrations.
 - No staging/dev/preview env may point at production Supabase.
 
@@ -101,8 +110,8 @@ Bonner/Guardian approval required before any of the following:
 - Create, rename, or migrate Vercel projects.
 - Move `arrowhead7.ai` or `www.arrowhead7.ai` aliases.
 - Pull, replace, rotate, or copy env/provider/credential values.
-- Create or migrate Supabase projects.
-- Apply Supabase migrations to production or staging.
+- Create or migrate additional Supabase projects.
+- Apply future Supabase migrations to production or staging.
 - Mutate R2 buckets, Cloudflare Stream, Stripe, OAuth, Shotstack, DNS, payment, or provider settings.
 - Delete or prune `.claude/worktrees` or git branches.
 - Push/merge/deploy production changes.
@@ -112,8 +121,7 @@ Bonner/Guardian approval required before any of the following:
 A7 is not ready for broad beta until:
 
 - Dedicated A7 Vercel ownership is migrated.
-- Dedicated A7 Supabase ownership is confirmed or migrated.
-- Pending render hardening migration is applied to the correct A7 Supabase project.
+- Vercel Git integration is connected so preview envs can target staging Supabase.
 - Captions R2-key ownership validation is patched.
 - Generic URL import SSRF controls are patched.
 - Render worker/queue architecture replaces synchronous long-running native renders.

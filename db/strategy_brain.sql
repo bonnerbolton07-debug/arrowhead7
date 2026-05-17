@@ -14,7 +14,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- suggested → confirmed → in_progress → published.
 
 CREATE TABLE IF NOT EXISTS public.content_calendar (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
 
   scheduled_date TIMESTAMPTZ NOT NULL,
@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_content_calendar_status
 -- Past performance of published posts. Feeds the analyzer.
 
 CREATE TABLE IF NOT EXISTS public.content_performance (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
 
   -- Optional links back to source records
@@ -103,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_content_performance_platform
 -- authenticated users, writes are server-side only.
 
 CREATE TABLE IF NOT EXISTS public.trend_cache (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   platform TEXT NOT NULL CHECK (platform IN (
     'youtube', 'tiktok', 'instagram', 'twitter', 'facebook', 'linkedin'
   )),
