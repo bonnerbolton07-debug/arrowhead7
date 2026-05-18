@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   RENDER_ENGINE_VERSION,
+  activeJobMatchesRequestedProvider,
   engineForProviderRenderId,
   selectedRenderProvider,
 } from './provider';
@@ -31,5 +32,22 @@ describe('render provider selection', () => {
       engine: 'shotstack',
       engineVersion: 'shotstack',
     });
+  });
+
+  it('does not let an active job from another explicit provider mask founder tests', () => {
+    expect(
+      activeJobMatchesRequestedProvider({
+        requestedProvider: 'a7_engine',
+        renderEngine: 'shotstack',
+        providerRenderId: 'shotstack-123',
+      })
+    ).toBe(false);
+    expect(
+      activeJobMatchesRequestedProvider({
+        requestedProvider: 'auto',
+        renderEngine: 'shotstack',
+        providerRenderId: 'shotstack-123',
+      })
+    ).toBe(true);
   });
 });

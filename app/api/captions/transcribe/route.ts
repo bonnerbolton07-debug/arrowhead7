@@ -18,7 +18,7 @@ import {
   WhisperUnavailableError,
 } from '@/lib/captions/whisper';
 import { buildLinesFromTranscription, toSRT, toVTT } from '@/lib/captions/srt';
-import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import { getOwnedPresignedDownloadUrl } from '@/lib/vault/ownership';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -74,10 +74,11 @@ export async function POST(request: NextRequest) {
 
   let presignedUrl: string;
   try {
-    presignedUrl = await getPresignedDownloadUrl(key, 3600);
+    presignedUrl = await getOwnedPresignedDownloadUrl(userId, key, 3600);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to resolve media';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = /forbidden/i.test(message) ? 403 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 
   try {

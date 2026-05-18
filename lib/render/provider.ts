@@ -26,3 +26,16 @@ export function engineForProviderRenderId(providerRenderId: unknown): {
   }
   return { engine: 'shotstack', engineVersion: 'shotstack' };
 }
+
+export function activeJobMatchesRequestedProvider(input: {
+  requestedProvider: RenderProvider;
+  renderEngine?: unknown;
+  providerRenderId?: unknown;
+}): boolean {
+  if (input.requestedProvider === 'auto') return true;
+  const engine =
+    input.renderEngine === 'a7_engine' || input.renderEngine === 'shotstack'
+      ? input.renderEngine
+      : engineForProviderRenderId(input.providerRenderId).engine;
+  return engine === input.requestedProvider;
+}

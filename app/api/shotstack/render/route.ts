@@ -15,17 +15,22 @@ import {
 } from '@/lib/shotstack/client';
 import { applyWatermarkIfRequired } from '@/lib/watermark/overlay';
 import { rateLimitResponse } from '@/lib/rate-limit';
-import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import { getOwnedPresignedDownloadUrl } from '@/lib/vault/ownership';
 import { renderWithA7Engine } from '@/lib/a7-engine/renderer';
-import { RENDER_ENGINE_VERSION, selectedRenderProvider, type RenderProvider } from '@/lib/render/provider';
+import {
+  RENDER_ENGINE_VERSION,
+  activeJobMatchesRequestedProvider,
+  selectedRenderProvider,
+  type RenderProvider,
+} from '@/lib/render/provider';
 import type { ShotstackOutput } from '@/types/edit';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-async function resolveRenderableUrl(value: string): Promise<string> {
+async function resolveRenderableUrl(userId: string, value: string): Promise<string> {
   if (/^https?:\/\//i.test(value)) return value;
-  return getPresignedDownloadUrl(value, 6 * 3600);
+  return getOwnedPresignedDownloadUrl(userId, value, 6 * 3600);
 }
 
 function errorMessage(error: unknown): string {
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest) {
 
     const { data: activeJob } = await supabase
       .from('render_jobs')
-      .select('id, status, progress')
+      .select('id, status, progress, shotstack_render_id, render_engine')
       .eq('edit_id', editId)
       .eq('user_id', user.id)
       .in('status', ['pending', 'processing', 'uploading'])
@@ -131,6 +136,22 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (activeJob) {
+      if (!activeJobMatchesRequestedProvider({
+        requestedProvider: renderProvider,
+        renderEngine: activeJob.render_engine,
+        providerRenderId: activeJob.shotstack_render_id,
+      })) {
+        return NextResponse.json(
+          {
+            error: 'A render is already processing with a different engine. Let it finish before starting this engine test.',
+            reason: 'active_render_provider_mismatch',
+            activeJobId: activeJob.id,
+            requestedProvider: renderProvider,
+            activeEngine: activeJob.render_engine ?? 'shotstack',
+          },
+          { status: 409 }
+        );
+      }
       return NextResponse.json({
         jobId: activeJob.id,
         status: 'processing',
@@ -169,7 +190,7 @@ export async function POST(request: NextRequest) {
     let startedFromFallbackConfig = false;
     if (!renderConfig) {
       const fallbackSourceUrl = edit.source_video_url
-        ? await resolveRenderableUrl(edit.source_video_url)
+        ? await resolveRenderableUrl(user.id, edit.source_video_url)
         : null;
       if (!fallbackSourceUrl) {
         console.warn('[shotstack/render] missing render config and source footage', {
@@ -225,6 +246,11 @@ export async function POST(request: NextRequest) {
             user_id: user.id,
             shotstack_render_id: engineResult.renderId,
             shotstack_status: 'done',
+            render_engine: 'a7_engine',
+            engine_version: RENDER_ENGINE_VERSION,
+            output_r2_key: engineResult.outputKey,
+            provider_fallback: false,
+            diagnostics: [engineResult.report],
             status: 'completed',
             progress: 100,
             started_at: completedAt,
@@ -402,7 +428,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const sourceUrl = edit.source_video_url
-          ? await resolveRenderableUrl(edit.source_video_url)
+          ? await resolveRenderableUrl(user.id, edit.source_video_url)
           : firstVideoAssetUrl(finalConfig);
         if (!sourceUrl) throw new Error('Edit has no renderable video source for fallback render');
         const fallbackConfig = applyWatermarkIfRequired(
@@ -469,6 +495,9 @@ export async function POST(request: NextRequest) {
         edit_id: editId,
         user_id: user.id,
         shotstack_render_id: shotstackRenderId,
+        render_engine: 'shotstack',
+        engine_version: 'shotstack',
+        provider_fallback: fellBackFromA7Engine,
         status: 'processing',
         started_at: new Date().toISOString(),
       })

@@ -15,7 +15,11 @@ import { unlinkQuiet } from '@/lib/style-dna/ffmpeg-runner';
 import { extractMetadata, detectScenes } from '@/lib/style-dna/probe';
 import { analyzeAudio } from '@/lib/style-dna/audio';
 import { RENDER_MEDIA_LIMITS, buildTimelineFromStyleDNA } from '@/lib/shotstack/client';
-import { getPresignedDownloadUrl } from '@/lib/cloudflare/r2';
+import {
+  assertUserOwnsStorageKey,
+  getOwnedPresignedDownloadUrl,
+  looksLikeRemoteUrl,
+} from '@/lib/vault/ownership';
 import { generateSoundtrack, analyseReferenceSoundtrack } from '@/lib/style-dna/soundtrack';
 import type { StyleDNA } from '@/types/edit';
 import { z } from 'zod';
@@ -146,6 +150,13 @@ export async function POST(request: NextRequest) {
     }
 
     const sourceKey = primaryMedia?.url ?? edit.source_video_url;
+    await assertOwnedInputKeys(user.id, [
+      sourceKey,
+      ...sourceMedia.map((asset) => asset.url),
+      options?.referenceSoundtrackKey,
+      options?.userAudioKey,
+    ]);
+
     console.info('[style-dna/match] building render config', {
       editId,
       sourceMediaCount: sourceMedia.length,
@@ -153,12 +164,12 @@ export async function POST(request: NextRequest) {
       targetDuration: options?.targetDuration ?? 30,
     });
     // Shotstack needs a publicly-fetchable URL; we hand it a 6h presigned URL.
-    const renderableUrl = await resolveRenderableUrl(sourceKey);
+    const renderableUrl = await resolveRenderableUrl(user.id, sourceKey);
     const renderSlate = selectRenderSlate(sourceMedia);
     const renderableSourceMedia = await Promise.all(
       renderSlate.map(async (asset) => ({
         ...asset,
-        url: await resolveRenderableUrl(asset.url),
+        url: await resolveRenderableUrl(user.id, asset.url),
       }))
     );
 
@@ -227,7 +238,7 @@ export async function POST(request: NextRequest) {
       if (userAudioKey) {
         try {
           soundtrack = {
-            url: await resolveRenderableUrl(userAudioKey),
+            url: await resolveRenderableUrl(user.id, userAudioKey),
             duration: targetDuration,
             beats: [],
             provider: 'user-upload',
@@ -301,9 +312,20 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function resolveRenderableUrl(value: string): Promise<string> {
-  if (/^https?:\/\//i.test(value)) return value;
-  return getPresignedDownloadUrl(value, 6 * 3600);
+async function resolveRenderableUrl(userId: string, value: string): Promise<string> {
+  if (looksLikeRemoteUrl(value)) return value;
+  return getOwnedPresignedDownloadUrl(userId, value, 6 * 3600);
+}
+
+async function assertOwnedInputKeys(
+  userId: string,
+  values: Array<string | null | undefined>
+): Promise<void> {
+  await Promise.all(
+    values
+      .filter((value): value is string => Boolean(value && !looksLikeRemoteUrl(value)))
+      .map((value) => assertUserOwnsStorageKey(userId, value))
+  );
 }
 
 function scenesToSegments(
