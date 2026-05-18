@@ -77,6 +77,13 @@ function formatDuration(ms?: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function importErrorMessage(payload: Record<string, unknown>, fallback: string): string {
+  const base = typeof payload.error === 'string' ? payload.error : fallback;
+  return typeof payload.requestId === 'string'
+    ? `${base} Trace ID: ${payload.requestId}`
+    : base;
+}
+
 interface Props {
   /** Called once a file has been pulled into R2. */
   onImported: (src: ImportedSource) => void;
@@ -234,7 +241,7 @@ export function CloudImportPanel({ onImported, className }: Props) {
         body: JSON.stringify(body),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `import_${res.status}`);
+      if (!res.ok) throw new Error(importErrorMessage(j, `import_${res.status}`));
       onImported(j as ImportedSource);
     } catch (e) {
       setImportError(e instanceof Error ? e.message : 'import_failed');
@@ -254,7 +261,7 @@ export function CloudImportPanel({ onImported, className }: Props) {
         body: JSON.stringify({ shareUrl: shareUrl.trim() }),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `import_${res.status}`);
+      if (!res.ok) throw new Error(importErrorMessage(j, `import_${res.status}`));
       onImported(j as ImportedSource);
       setShareUrl('');
     } catch (e) {
@@ -275,7 +282,7 @@ export function CloudImportPanel({ onImported, className }: Props) {
         body: JSON.stringify({ url: genericUrl.trim() }),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `import_${res.status}`);
+      if (!res.ok) throw new Error(importErrorMessage(j, `import_${res.status}`));
       onImported(j as ImportedSource);
     } catch (e) {
       setImportError(e instanceof Error ? e.message : 'import_failed');

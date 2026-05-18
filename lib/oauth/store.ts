@@ -154,6 +154,7 @@ export async function getCloudConnection(
     )
     .eq('user_id', userId)
     .eq('provider', provider)
+    .eq('connection_status', 'connected')
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle();

@@ -218,10 +218,11 @@ export async function getDriveFile(opts: {
 export async function downloadDriveFile(opts: {
   accessToken: string;
   fileId: string;
+  signal?: AbortSignal;
 }): Promise<{ stream: ReadableStream<Uint8Array>; contentType: string; contentLength: number }> {
   const res = await fetch(
     `${DRIVE_API}/files/${encodeURIComponent(opts.fileId)}?alt=media`,
-    { headers: { Authorization: `Bearer ${opts.accessToken}` } }
+    { headers: { Authorization: `Bearer ${opts.accessToken}` }, signal: opts.signal }
   );
   if (!res.ok || !res.body) {
     throw new Error(`Drive download failed: ${res.status} ${await res.text()}`);

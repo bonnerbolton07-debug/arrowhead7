@@ -178,6 +178,7 @@ export async function listDropboxFolder(opts: {
 export async function downloadDropboxFile(opts: {
   accessToken: string;
   path: string;
+  signal?: AbortSignal;
 }): Promise<{ stream: ReadableStream<Uint8Array>; contentLength: number }> {
   const res = await fetch(`${DROPBOX_CONTENT}/files/download`, {
     method: 'POST',
@@ -185,6 +186,7 @@ export async function downloadDropboxFile(opts: {
       Authorization: `Bearer ${opts.accessToken}`,
       'Dropbox-API-Arg': JSON.stringify({ path: opts.path }),
     },
+    signal: opts.signal,
   });
   if (!res.ok || !res.body) {
     throw new Error(`Dropbox download failed: ${res.status} ${await res.text()}`);

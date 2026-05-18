@@ -68,6 +68,13 @@ function formatDuration(ms?: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function importErrorMessage(payload: Record<string, unknown>, fallback: string): string {
+  const base = typeof payload.error === 'string' ? payload.error : fallback;
+  return typeof payload.requestId === 'string'
+    ? `${base} Trace ID: ${payload.requestId}`
+    : base;
+}
+
 export function VaultBrowser({
   connected,
   onImported,
@@ -190,7 +197,7 @@ export function VaultBrowser({
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `Import failed (${res.status})`);
+        throw new Error(importErrorMessage(j, `Import failed (${res.status})`));
       }
       const data = await res.json();
       setImportedKeys((m) => ({ ...m, [item.id]: data.key }));
